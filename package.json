@@ -1,0 +1,13 @@
+{
+  "type": "module",
+  "scripts": {
+    "start": "tsx server.ts"
+  },
+  "dependencies": {
+    "hono": "^4.7.2",
+    "@hono/node-server": "^1.13.8"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.3"
+  }
+}
