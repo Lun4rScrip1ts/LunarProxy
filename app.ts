@@ -1155,7 +1155,7 @@ body {
   <div class="brand">Lunar<div class="brand-sub">Proxy</div></div>
   <div class="side-label">NAVIGATION</div>
   <nav class="side-nav">
-    <button class="side-btn ${page === "home" ? "active" : ""}" onclick="window.location.href='/'>Home</button>
+    <button class="side-btn ${page === "home" ? "active" : ""}" onclick="window.location.href='/'">Home</button>
     <button class="side-btn ${page === "games" ? "active" : ""}" onclick="window.location.href='/page/games'">Games</button>
     <button class="side-btn ${page === "media" ? "active" : ""}" onclick="window.location.href='/page/media'">Media</button>
     <button class="side-btn ${page === "chat" ? "active" : ""}" onclick="window.location.href='/page/chat'">Chat</button>
