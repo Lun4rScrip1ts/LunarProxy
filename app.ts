@@ -469,13 +469,19 @@ frame.addEventListener("load", () => {
 
 app.all("/proxy", async (c) => {
   let raw = c.req.query("url") || "";
-  if (!raw) return c.json({ error: "URL required" }, 400);
 
+  if (!raw) {
+    return c.json({ error: "URL required" }, 400);
+  }
+
+  // Decode the URL safely.
   try {
     raw = decodeURIComponent(raw);
   } catch {}
 
-  if (!/^https?:\/\//i.test(raw)) raw = "https://" + raw;
+  if (!/^https?:\/\//i.test(raw)) {
+    raw = "https://" + raw;
+  }
 
   let target: URL;
 
@@ -485,6 +491,44 @@ app.all("/proxy", async (c) => {
     return c.json({ error: "Invalid URL" }, 400);
   }
 
+  /*
+   * DuckDuckGo result links often look like:
+   *
+   * /l/?uddg=https%3A%2F%2Fexample.com
+   *
+   * We don't want to proxy DuckDuckGo's redirect page.
+   * We want to extract the real destination.
+   */
+  const isDuckDuckGo =
+    target.hostname === "duckduckgo.com" ||
+    target.hostname.endsWith(".duckduckgo.com");
+
+  if (
+    isDuckDuckGo &&
+    (target.pathname === "/l" || target.pathname === "/l/")
+  ) {
+    const destination = target.searchParams.get("uddg");
+
+    if (destination) {
+      try {
+        const decodedDestination = decodeURIComponent(destination);
+        const destinationUrl = new URL(decodedDestination);
+
+        if (!isSafeTarget(destinationUrl)) {
+          return c.json({ error: "Blocked target" }, 403);
+        }
+
+        target = destinationUrl;
+      } catch {
+        return c.json(
+          { error: "Invalid DuckDuckGo destination" },
+          400
+        );
+      }
+    }
+  }
+
+  // Final safety check after any URL unwrapping.
   if (!isSafeTarget(target)) {
     return c.json({ error: "Blocked target" }, 403);
   }
@@ -493,13 +537,18 @@ app.all("/proxy", async (c) => {
 
   if (!["GET", "HEAD"].includes(method)) {
     return c.json(
-      { error: "This proxy currently supports GET and HEAD requests." },
+      {
+        error: "This proxy currently supports GET and HEAD requests."
+      },
       405
     );
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 25000);
+
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, 25000);
 
   try {
     const response = await fetch(target.href, {
@@ -511,6 +560,9 @@ app.all("/proxy", async (c) => {
 
     const headers = new Headers();
 
+    /*
+     * Copy useful response headers.
+     */
     for (const name of [
       "content-type",
       "content-language",
@@ -520,10 +572,17 @@ app.all("/proxy", async (c) => {
       "content-disposition",
     ]) {
       const value = response.headers.get(name);
-      if (value) headers.set(name, value);
+
+      if (value) {
+        headers.set(name, value);
+      }
     }
 
     headers.set("X-Lunar-Upstream", target.hostname);
+
+    /*
+     * We're handling compression ourselves.
+     */
     headers.delete("content-encoding");
     headers.delete("content-length");
 
@@ -534,30 +593,68 @@ app.all("/proxy", async (c) => {
       });
     }
 
-    const contentType = response.headers.get("content-type") || "";
+    const contentType =
+      response.headers.get("content-type") || "";
 
+    /*
+     * HTML pages need URL rewriting so that:
+     *
+     * images
+     * CSS
+     * JavaScript
+     * links
+     * forms
+     * media
+     *
+     * continue going through Lunar.
+     */
     if (
       contentType.includes("text/html") ||
       contentType.includes("application/xhtml+xml")
     ) {
       const text = await response.text();
-      return new Response(rewriteHtml(text, target.href), {
+
+      /*
+       * IMPORTANT:
+       * response.url may be different from target.href because
+       * the upstream server may have redirected somewhere else.
+       *
+       * Using response.url gives rewriteHtml the correct base URL.
+       */
+      const baseUrl = response.url || target.href;
+
+      const rewritten = rewriteHtml(text, baseUrl);
+
+      headers.set("content-type", "text/html; charset=utf-8");
+
+      return new Response(rewritten, {
         status: response.status,
         headers,
       });
     }
 
+    /*
+     * Images, CSS, JS, fonts, videos, etc.
+     * are passed through without HTML rewriting.
+     */
     const buffer = await response.arrayBuffer();
 
     return new Response(buffer, {
       status: response.status,
       headers,
     });
+
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Upstream request failed";
+      error instanceof Error
+        ? error.message
+        : "Upstream request failed";
 
-    console.error("[lunar] proxy error:", target.href, message);
+    console.error(
+      "[lunar] proxy error:",
+      target.href,
+      message
+    );
 
     return c.json(
       {
@@ -566,11 +663,11 @@ app.all("/proxy", async (c) => {
       },
       502
     );
+
   } finally {
     clearTimeout(timer);
   }
 });
-
 // ----------------------------- EMBEDS -----------------------------
 
 app.get("/embed/youtube", (c) => {
