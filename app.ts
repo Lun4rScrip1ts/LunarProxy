@@ -393,75 +393,137 @@ return headers;
 }
 
 function rewriteCookieForProxy(raw: string, upstreamHost: string) {
-const firstSemi = raw.indexOf(";");
-const first = firstSemi >= 0 ? raw.slice(0, firstSemi) : raw;
-const rest = firstSemi >= 0 ? raw.slice(firstSemi) : "";
-const eq = first.indexOf("=");
-if (eq < 1) return null;
+  const firstSemi = raw.indexOf(";");
+  const first = firstSemi >= 0 ? raw.slice(0, firstSemi) : raw;
+  const rest = firstSemi >= 0 ? raw.slice(firstSemi) : "";
+  const eq = first.indexOf("=");
 
-const name = first.slice(0, eq);
-const value = first.slice(eq + 1);
-const safeHost = upstreamHost.replace(/[^a-z0-9]/gi, "_");
-return __lunar_${safeHost}_${name}=${value}${rest.replace(/;\s*Domain=[^;]*/ig, "").replace(/;\s*SameSite=None/ig, "; SameSite=Lax")}; Path=/;
+  if (eq < 1) return null;
+
+  const name = first.slice(0, eq);
+  const value = first.slice(eq + 1);
+  const safeHost = upstreamHost.replace(/[^a-z0-9]/gi, "_");
+
+  return `__lunar_${safeHost}_${name}=${value}${rest
+    .replace(/;\s*Domain=[^;]*/ig, "")
+    .replace(/;\s*SameSite=None/ig, "; SameSite=Lax")}; Path=/`;
 }
 
 function cookiesForUpstream(c: any, upstreamHost: string) {
-const cookie = c.req.header("cookie") || "";
-if (!cookie) return "";
-const safeHost = upstreamHost.replace(/[^a-z0-9]/gi, "_");
-const prefix = __lunar_${safeHost}_;
-return cookie.split(";").map((part: string) => part.trim())
-.filter((part: string) => part.startsWith(prefix))
-.map((part: string) => part.slice(prefix.length))
-.join("; ");
+  const cookie = c.req.header("cookie") || "";
+  if (!cookie) return "";
+
+  const safeHost = upstreamHost.replace(/[^a-z0-9]/gi, "_");
+  const prefix = `__lunar_${safeHost}_`;
+
+  return cookie
+    .split(";")
+    .map((part: string) => part.trim())
+    .filter((part: string) => part.startsWith(prefix))
+    .map((part: string) => part.slice(prefix.length))
+    .join("; ");
 }
 
 function rewriteTextUrls(text: string, baseHref: string) {
-// Keep the page's own origin intact, but route absolute/relative resources
-// back through Lunar. This covers navigation, images, stylesheets, forms,
-// posters, media, srcsets and most simple app resource URLs.
-text = text.replace(/\bhref\s*=\s*(['"])([^'"]+)\1/gi, (m, q, u) => {
-if (/^(?:#|javascript:|mailto:|tel:|data:|blob:)/i.test(u)) return m;
-return href=${q}${toProxy(u, baseHref)}${q};
-});
+  text = text.replace(
+    /\bhref\s*=\s*(['"])([^'"]+)\1/gi,
+    (m, q, u) => {
+      if (/^(?:#|javascript:|mailto:|tel:|data:|blob:)/i.test(u)) {
+        return m;
+      }
 
-text = text.replace(/\bsrc\s*=\s*(['"])([^'"]+)\1/gi, (m, q, u) => {
-if (/^(?:#|javascript:|mailto:|tel:|data:|blob:)/i.test(u)) return m;
-return src=${q}${toProxy(u, baseHref)}${q};
-});
+      return `href=${q}${toProxy(u, baseHref)}${q}`;
+    }
+  );
 
-for (const attr of ["poster", "data-src", "data-original", "data-lazy-src"]) {
-const re = new RegExp(\\b${attr}\\s*=\\s*(['"])([^'"]+)\\1, "gi");
-text = text.replace(re, (m, q, u) =>
-/^(?:data:|blob:|javascript:)/i.test(u) ? m : ${attr}=${q}${toProxy(u, baseHref)}${q}
-);
-}
+  text = text.replace(
+    /\bsrc\s*=\s*(['"])([^'"]+)\1/gi,
+    (m, q, u) => {
+      if (/^(?:#|javascript:|mailto:|tel:|data:|blob:)/i.test(u)) {
+        return m;
+      }
 
-text = text.replace(/\bsrcset\s*=\s*(['"])([^'"]+)\1/gi, (m, q, srcset) => {
-const rewritten = srcset.split(",").map((part: string) => {
-const bits = part.trim().split(/\s+/);
-if (!bits[0] || /^(?:data:|blob:)/i.test(bits[0])) return part;
-bits[0] = toProxy(bits[0], baseHref);
-return bits.join(" ");
-}).join(", ");
-return srcset=${q}${rewritten}${q};
-});
+      return `src=${q}${toProxy(u, baseHref)}${q}`;
+    }
+  );
 
-text = text.replace(/\baction\s*=\s*(['"])([^'"]+)\1/gi, (m, q, u) => {
-if (/^(?:#|javascript:|mailto:|tel:)/i.test(u)) return m;
-return action=${q}${toProxy(u, baseHref)}${q};
-});
+  for (const attr of [
+    "poster",
+    "data-src",
+    "data-original",
+    "data-lazy-src",
+  ]) {
+    const re = new RegExp(
+      `\\b${attr}\\s*=\\s*(['"])([^'"]+)\\1`,
+      "gi"
+    );
 
-text = text.replace(/url(\s*(['"]?)([^'")\s]+)\1\s*)/gi, (m, q, u) => {
-if (/^(?:data:|blob:)/i.test(u)) return m;
-return url("${toProxy(u, baseHref)}");
-});
+    text = text.replace(re, (m, q, u) => {
+      if (/^(?:data:|blob:|javascript:)/i.test(u)) {
+        return m;
+      }
 
-text = text.replace(/http-equiv=["']refresh["'][^>]*content="'["']/gi, (m, content) => {
-return m.replace(content, content.replace(/url=([^;\s]+)/i, (_, u) => "url=" + toProxy(u.trim(), baseHref)));
-});
+      return `${attr}=${q}${toProxy(u, baseHref)}${q}`;
+    });
+  }
 
-return text;
+  text = text.replace(
+    /\bsrcset\s*=\s*(['"])([^'"]+)\1/gi,
+    (m, q, srcset) => {
+      const rewritten = srcset
+        .split(",")
+        .map((part: string) => {
+          const bits = part.trim().split(/\s+/);
+
+          if (!bits[0] || /^(?:data:|blob:)/i.test(bits[0])) {
+            return part;
+          }
+
+          bits[0] = toProxy(bits[0], baseHref);
+          return bits.join(" ");
+        })
+        .join(", ");
+
+      return `srcset=${q}${rewritten}${q}`;
+    }
+  );
+
+  text = text.replace(
+    /\baction\s*=\s*(['"])([^'"]+)\1/gi,
+    (m, q, u) => {
+      if (/^(?:#|javascript:|mailto:|tel:)/i.test(u)) {
+        return m;
+      }
+
+      return `action=${q}${toProxy(u, baseHref)}${q}`;
+    }
+  );
+
+  text = text.replace(
+    /url\(\s*(['"]?)([^'")\s]+)\1\s*\)/gi,
+    (m, q, u) => {
+      if (/^(?:data:|blob:)/i.test(u)) {
+        return m;
+      }
+
+      return `url("${toProxy(u, baseHref)}")`;
+    }
+  );
+
+  text = text.replace(
+    /http-equiv=["']refresh["'][^>]*content=["']([^"']*)["']/gi,
+    (m, content) => {
+      return m.replace(
+        content,
+        content.replace(
+          /url=([^;\s]+)/i,
+          (_, u) => "url=" + toProxy(u.trim(), baseHref)
+        )
+      );
+    }
+  );
+
+  return text;
 }
 
 app.all("/proxy", async (c) => {
