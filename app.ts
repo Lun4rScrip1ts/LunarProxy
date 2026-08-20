@@ -840,9 +840,9 @@ return c.json({
 app.options("/proxy", (c) => new Response(null, {
 status: 204,
 headers: {
-"Access-Control-Allow-Origin": "",
+"Access-Control-Allow-Origin": "*",
 "Access-Control-Allow-Methods": "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS",
-"Access-Control-Allow-Headers": ""
+"Access-Control-Allow-Headers": "*"
 }
 }));
 
@@ -958,79 +958,85 @@ iframe{width:100%;height:100%;border:0}
 });
 
 // ─── CATEGORY PAGES ─────────────────────────────────────────────────
-app.get("/page/", (c) => {
-const page = c.req.param("page");
-const go = (url: string) => window.location.href='/view?url='+encodeURIComponent('${url}');
-const embed = (path: string) => window.location.href='${path}';
+app.get("/page/:page", (c) => {
+  const page = c.req.param("page") || "";
 
-let content = "";
-if (page === "games") {
-content =       <div style="padding: 40px; text-align: center;">
+  const go = (url: string) =>
+    `window.location.href='/view?url=' + encodeURIComponent('${url}')`;
+
+  const embed = (path: string) =>
+    `window.location.href='${path}'`;
+
+  let content = "";
+
+  if (page === "games") {
+    content = `
+      <div style="padding: 40px; text-align: center;">
         <h1>Games Hub</h1>
-        <p style="color: #888; margin-bottom: 30px;">Play online games directly in your browser</p>
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; max-width: 900px; margin: 0 auto;">
-          <div style="background: #111; border: 1px solid #222; border-radius: 12px; padding: 20px; cursor: pointer; transition: all 0.15s; display: flex; flex-direction: column; align-items: center;" onclick="${go('https://www.chess.com')}">
-            <div style="font-size: 48px; margin-bottom: 10px;">♟️</div>
-            <h3 style="margin: 0; color: #fff; font-size: 16px;">Chess.com</h3>
-            <p style="margin: 4px 0 0; color: #888; font-size: 12px;">Play chess online</p>
+        <p style="color:#888;margin-bottom:30px;">Play online games directly in your browser</p>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;max-width:900px;margin:0 auto;">
+          <div style="background:#111;border:1px solid #222;border-radius:12px;padding:20px;cursor:pointer;display:flex;flex-direction:column;align-items:center;" onclick="${go('https://www.chess.com')}">
+            <div style="font-size:48px;margin-bottom:10px;">♟️</div>
+            <h3 style="margin:0;color:#fff;font-size:16px;">Chess.com</h3>
+            <p style="margin:4px 0 0;color:#888;font-size:12px;">Play chess online</p>
           </div>
-          <div style="background: #111; border: 1px solid #222; border-radius: 12px; padding: 20px; cursor: pointer; transition: all 0.15s; display: flex; flex-direction: column; align-items: center;" onclick="${go('https://www.miniclip.com')}">
-            <div style="font-size: 48px; margin-bottom: 10px;">🎯</div>
-            <h3 style="margin: 0; color: #fff; font-size: 16px;">Miniclip</h3>
-            <p style="margin: 4px 0 0; color: #888; font-size: 12px;">Casual games</p>
+          <div style="background:#111;border:1px solid #222;border-radius:12px;padding:20px;cursor:pointer;display:flex;flex-direction:column;align-items:center;" onclick="${go('https://www.miniclip.com')}">
+            <div style="font-size:48px;margin-bottom:10px;">🎯</div>
+            <h3 style="margin:0;color:#fff;font-size:16px;">Miniclip</h3>
+            <p style="margin:4px 0 0;color:#888;font-size:12px;">Casual games</p>
           </div>
-          <div style="background: #111; border: 1px solid #222; border-radius: 12px; padding: 20px; cursor: pointer; transition: all 0.15s; display: flex; flex-direction: column; align-items: center;" onclick="${go('https://www.coolmathgames.com')}">
-            <div style="font-size: 48px; margin-bottom: 10px;">🧮</div>
-            <h3 style="margin: 0; color: #fff; font-size: 16px;">Cool Math Games</h3>
-            <p style="margin: 4px 0 0; color: #888; font-size: 12px;">Math & puzzle games</p>
+          <div style="background:#111;border:1px solid #222;border-radius:12px;padding:20px;cursor:pointer;display:flex;flex-direction:column;align-items:center;" onclick="${go('https://www.coolmathgames.com')}">
+            <div style="font-size:48px;margin-bottom:10px;">🧮</div>
+            <h3 style="margin:0;color:#fff;font-size:16px;">Cool Math Games</h3>
+            <p style="margin:4px 0 0;color:#888;font-size:12px;">Math & puzzle games</p>
           </div>
-          <div style="background: #111; border: 1px solid #222; border-radius: 12px; padding: 20px; cursor: pointer; transition: all 0.15s; display: flex; flex-direction: column; align-items: center;" onclick="${go('https://www.pogo.com')}">
-            <div style="font-size: 48px; margin-bottom: 10px;">🃏</div>
-            <h3 style="margin: 0; color: #fff; font-size: 16px;">Pogo</h3>
-            <p style="margin: 4px 0 0; color: #888; font-size: 12px;">Card & board games</p>
+          <div style="background:#111;border:1px solid #222;border-radius:12px;padding:20px;cursor:pointer;display:flex;flex-direction:column;align-items:center;" onclick="${go('https://www.pogo.com')}">
+            <div style="font-size:48px;margin-bottom:10px;">🃏</div>
+            <h3 style="margin:0;color:#fff;font-size:16px;">Pogo</h3>
+            <p style="margin:4px 0 0;color:#888;font-size:12px;">Card & board games</p>
           </div>
         </div>
       </div>
-   ;
-} else if (page === "media") {
-content =       <div style="padding: 40px; text-align: center;">
+    `;
+  } else if (page === "media") {
+    content = `
+      <div style="padding:40px;text-align:center;">
         <h1>Media Library</h1>
-        <p style="color: #888; margin-bottom: 30px;">Watch movies, TV shows, and listen to music</p>
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; max-width: 900px; margin: 0 auto;">
-          <div style="background: #111; border: 1px solid #222; border-radius: 12px; padding: 20px; cursor: pointer; display: flex; flex-direction: column; align-items: center;" onclick="${embed('/embed/youtube')}">
-            <div style="font-size: 48px; margin-bottom: 10px;">▶️</div>
-            <h3 style="margin: 0; color: #fff; font-size: 16px;">YouTube</h3>
-            <p style="margin: 4px 0 0; color: #888; font-size: 12px;">Videos & streaming</p>
+        <p style="color:#888;margin-bottom:30px;">Watch movies, TV shows, and listen to music</p>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;max-width:900px;margin:0 auto;">
+          <div style="background:#111;border:1px solid #222;border-radius:12px;padding:20px;cursor:pointer;display:flex;flex-direction:column;align-items:center;" onclick="${embed('/embed/youtube')}">
+            <div style="font-size:48px;margin-bottom:10px;">▶️</div>
+            <h3 style="margin:0;color:#fff;font-size:16px;">YouTube</h3>
+            <p style="margin:4px 0 0;color:#888;font-size:12px;">Videos & streaming</p>
           </div>
-          <div style="background: #111; border: 1px solid #222; border-radius: 12px; padding: 20px; cursor: pointer; display: flex; flex-direction: column; align-items: center;" onclick="${go('https://www.netflix.com')}">
-            <div style="font-size: 48px; margin-bottom: 10px;">🎬</div>
-            <h3 style="margin: 0; color: #fff; font-size: 16px;">Netflix</h3>
-            <p style="margin: 4px 0 0; color: #888; font-size: 12px;">Movies & TV shows</p>
+          <div style="background:#111;border:1px solid #222;border-radius:12px;padding:20px;cursor:pointer;display:flex;flex-direction:column;align-items:center;" onclick="${go('https://www.netflix.com')}">
+            <div style="font-size:48px;margin-bottom:10px;">🎬</div>
+            <h3 style="margin:0;color:#fff;font-size:16px;">Netflix</h3>
+            <p style="margin:4px 0 0;color:#888;font-size:12px;">Movies & TV shows</p>
           </div>
-          <div style="background: #111; border: 1px solid #222; border-radius: 12px; padding: 20px; cursor: pointer; display: flex; flex-direction: column; align-items: center;" onclick="${go('https://open.spotify.com')}">
-            <div style="font-size: 48px; margin-bottom: 10px;">🎵</div>
-            <h3 style="margin: 0; color: #fff; font-size: 16px;">Spotify</h3>
-            <p style="margin: 4px 0 0; color: #888; font-size: 12px;">Music streaming</p>
+          <div style="background:#111;border:1px solid #222;border-radius:12px;padding:20px;cursor:pointer;display:flex;flex-direction:column;align-items:center;" onclick="${go('https://open.spotify.com')}">
+            <div style="font-size:48px;margin-bottom:10px;">🎵</div>
+            <h3 style="margin:0;color:#fff;font-size:16px;">Spotify</h3>
+            <p style="margin:4px 0 0;color:#888;font-size:12px;">Music streaming</p>
           </div>
-          <div style="background: #111; border: 1px solid #222; border-radius: 12px; padding: 20px; cursor: pointer; display: flex; flex-direction: column; align-items: center;" onclick="${go('https://x.com')}">
-            <div style="font-size: 48px; margin-bottom: 10px;">𝕏</div>
-            <h3 style="margin: 0; color: #fff; font-size: 16px;">Twitter/X</h3>
-            <p style="margin: 4px 0 0; color: #888; font-size: 12px;">Social media</p>
+          <div style="background:#111;border:1px solid #222;border-radius:12px;padding:20px;cursor:pointer;display:flex;flex-direction:column;align-items:center;" onclick="${go('https://x.com')}">
+            <div style="font-size:48px;margin-bottom:10px;">𝕏</div>
+            <h3 style="margin:0;color:#fff;font-size:16px;">Twitter/X</h3>
+            <p style="margin:4px 0 0;color:#888;font-size:12px;">Social media</p>
           </div>
         </div>
       </div>
-   ;
-} else if (page === "chat") {
-content =       <div style="padding: 20px; height: 100%; display: flex; flex-direction: column;">
-        <h1 style="margin-top: 0; margin-bottom: 20px;">Chat Room</h1>
-        <div style="flex: 1; background: #111; border: 1px solid #222; border-radius: 12px; padding: 16px; overflow-y: auto; margin-bottom: 16px;" id="chatMessages">
-          <div style="color: #555; text-align: center; padding: 20px;">
-            Welcome to Lunar Chat! Type a message below.
-          </div>
+    `;
+  } else if (page === "chat") {
+    content = `
+      <div style="padding:20px;height:100%;display:flex;flex-direction:column;">
+        <h1 style="margin-top:0;margin-bottom:20px;">Chat Room</h1>
+        <div style="flex:1;background:#111;border:1px solid #222;border-radius:12px;padding:16px;overflow-y:auto;margin-bottom:16px;" id="chatMessages">
+          <div style="color:#555;text-align:center;padding:20px;">Welcome to Lunar Chat! Type a message below.</div>
         </div>
-        <div style="display: flex; gap: 8px;">
-          <input type="text" id="chatInput" placeholder="Type your message..." style="flex: 1; padding: 10px; background: #111; border: 1px solid #222; border-radius: 8px; color: #fff; outline: none;">
-          <button onclick="sendMessage()" style="padding: 10px 20px; background: #fff; color: #000; border: none; border-radius: 8px; cursor: pointer; font-weight: 500;">Send</button>
+        <div style="display:flex;gap:8px;">
+          <input type="text" id="chatInput" placeholder="Type your message..." style="flex:1;padding:10px;background:#111;border:1px solid #222;border-radius:8px;color:#fff;outline:none;">
+          <button onclick="sendMessage()" style="padding:10px 20px;background:#fff;color:#000;border:none;border-radius:8px;cursor:pointer;font-weight:500;">Send</button>
         </div>
       </div>
       <script>
@@ -1047,57 +1053,66 @@ content =       <div style="padding: 20px; height: 100%; display: flex; flex-dir
         }
         function renderMessages() {
           const container = document.getElementById('chatMessages');
-          container.innerHTML = messages.map(m => '<div style="margin-bottom: 12px; padding: 8px; background: #000; border-radius: 4px;"><div style="font-weight: 500; color: #fff; font-size: 12px;">&lt;' + m.username + '&gt; <span style="color: #555;">' + m.time + '</span></div><div style="color: #fff; margin-top: 4px;">' + m.text + '</div></div>').join('');
+          container.innerHTML = messages.map(m => '<div style="margin-bottom:12px;padding:8px;background:#000;border-radius:4px;"><div style="font-weight:500;color:#fff;font-size:12px;">&lt;' + m.username + '&gt; <span style="color:#555;">' + m.time + '</span></div><div style="color:#fff;margin-top:4px;">' + m.text + '</div></div>').join('');
           container.scrollTop = container.scrollHeight;
         }
         document.getElementById('chatInput').addEventListener('keypress', e => { if (e.key === 'Enter') sendMessage(); });
       </script>
-   ;
-} else if (page === "emulator") {
-content =       <div style="padding: 40px; text-align: center;">
+    `;
+  } else if (page === "emulator") {
+    content = `
+      <div style="padding:40px;text-align:center;">
         <h1>Emulator</h1>
-        <p style="color: #888; margin-bottom: 30px;">Play retro games with online emulators</p>
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; max-width: 800px; margin: 0 auto;">
-          <div style="background: #111; border: 1px solid #222; border-radius: 12px; padding: 20px; cursor: pointer; display: flex; flex-direction: column; align-items: center;" onclick="${go('https://www.emulatoronline.com')}">
-            <div style="font-size: 40px;">🎮</div>
-            <h3 style="margin: 8px 0 0; color: #fff; font-size: 14px;">Emulator Online</h3>
-            <p style="margin: 2px 0 0; color: #888; font-size: 11px;">NES, SNES, Genesis</p>
+        <p style="color:#888;margin-bottom:30px;">Play retro games with online emulators</p>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;max-width:800px;margin:0 auto;">
+          <div style="background:#111;border:1px solid #222;border-radius:12px;padding:20px;cursor:pointer;display:flex;flex-direction:column;align-items:center;" onclick="${go('https://www.emulatoronline.com')}">
+            <div style="font-size:40px;">🎮</div>
+            <h3 style="margin:8px 0 0;color:#fff;font-size:14px;">Emulator Online</h3>
+            <p style="margin:2px 0 0;color:#888;font-size:11px;">NES, SNES, Genesis</p>
           </div>
-          <div style="background: #111; border: 1px solid #222; border-radius: 12px; padding: 20px; cursor: pointer; display: flex; flex-direction: column; align-items: center;" onclick="${go('https://www.retrogames.cz')}">
-            <div style="font-size: 40px;">👾</div>
-            <h3 style="margin: 8px 0 0; color: #fff; font-size: 14px;">Retro Games</h3>
-            <p style="margin: 2px 0 0; color: #888; font-size: 11px;">Classic arcade games</p>
+          <div style="background:#111;border:1px solid #222;border-radius:12px;padding:20px;cursor:pointer;display:flex;flex-direction:column;align-items:center;" onclick="${go('https://www.retrogames.cz')}">
+            <div style="font-size:40px;">👾</div>
+            <h3 style="margin:8px 0 0;color:#fff;font-size:14px;">Retro Games</h3>
+            <p style="margin:2px 0 0;color:#888;font-size:11px;">Classic arcade games</p>
           </div>
         </div>
       </div>
-   ;
-} else if (page === "ai") {
-content =       <div style="padding: 40px; text-align: center;">
+    `;
+  } else if (page === "ai") {
+    content = `
+      <div style="padding:40px;text-align:center;">
         <h1>AI Assistant</h1>
-        <p style="color: #888; margin-bottom: 30px;">Access powerful AI tools online</p>
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; max-width: 900px; margin: 0 auto;">
-          <div style="background: #111; border: 1px solid #222; border-radius: 12px; padding: 20px; cursor: pointer; display: flex; flex-direction: column; align-items: center;" onclick="${go('https://chat.openai.com')}">
-            <div style="font-size: 48px; margin-bottom: 10px;">🤖</div>
-            <h3 style="margin: 0; color: #fff; font-size: 16px;">ChatGPT</h3>
-            <p style="margin: 4px 0 0; color: #888; font-size: 12px;">AI conversation</p>
+        <p style="color:#888;margin-bottom:30px;">Access powerful AI tools online</p>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;max-width:900px;margin:0 auto;">
+          <div style="background:#111;border:1px solid #222;border-radius:12px;padding:20px;cursor:pointer;display:flex;flex-direction:column;align-items:center;" onclick="${go('https://chat.openai.com')}">
+            <div style="font-size:48px;margin-bottom:10px;">🤖</div>
+            <h3 style="margin:0;color:#fff;font-size:16px;">ChatGPT</h3>
+            <p style="margin:4px 0 0;color:#888;font-size:12px;">AI conversation</p>
           </div>
-          <div style="background: #111; border: 1px solid #222; border-radius: 12px; padding: 20px; cursor: pointer; display: flex; flex-direction: column; align-items: center;" onclick="${go('https://gemini.google.com')}">
-            <div style="font-size: 48px; margin-bottom: 10px;">✨</div>
-            <h3 style="margin: 0; color: #fff; font-size: 16px;">Google Gemini</h3>
-            <p style="margin: 4px 0 0; color: #888; font-size: 12px;">Google's AI assistant</p>
+          <div style="background:#111;border:1px solid #222;border-radius:12px;padding:20px;cursor:pointer;display:flex;flex-direction:column;align-items:center;" onclick="${go('https://gemini.google.com')}">
+            <div style="font-size:48px;margin-bottom:10px;">✨</div>
+            <h3 style="margin:0;color:#fff;font-size:16px;">Google Gemini</h3>
+            <p style="margin:4px 0 0;color:#888;font-size:12px;">Google's AI assistant</p>
           </div>
-          <div style="background: #111; border: 1px solid #222; border-radius: 12px; padding: 20px; cursor: pointer; display: flex; flex-direction: column; align-items: center;" onclick="${go('https://www.bing.com/chat')}">
-            <div style="font-size: 48px; margin-bottom: 10px;">🔍</div>
-            <h3 style="margin: 0; color: #fff; font-size: 16px;">Bing Chat</h3>
-            <p style="margin: 4px 0 0; color: #888; font-size: 12px;">Web-powered AI</p>
+          <div style="background:#111;border:1px solid #222;border-radius:12px;padding:20px;cursor:pointer;display:flex;flex-direction:column;align-items:center;" onclick="${go('https://www.bing.com/chat')}">
+            <div style="font-size:48px;margin-bottom:10px;">🔍</div>
+            <h3 style="margin:0;color:#fff;font-size:16px;">Bing Chat</h3>
+            <p style="margin:4px 0 0;color:#888;font-size:12px;">Web-powered AI</p>
           </div>
         </div>
       </div>
-   ;
-}
+    `;
+  } else {
+    content = `
+      <div style="padding:40px;text-align:center;">
+        <h1>Lunar</h1>
+        <p style="color:#888;margin-bottom:20px;">Page not found.</p>
+        <button onclick="window.location.href='/'" style="padding:10px 18px;border:1px solid #333;background:#111;color:#fff;border-radius:10px;cursor:pointer;">Back Home</button>
+      </div>
+    `;
+  }
 
-const html = `<!DOCTYPE html>
-
+  const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -1105,126 +1120,24 @@ const html = `<!DOCTYPE html>
 <title>Lunar Proxy</title>
 ${LUNAR_CHROME}
 <style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-:root {
-  --bg: #000;
-  --surface: rgba(16,16,16,.88);
-  --surface-hover: rgba(28,28,28,.96);
-  --border: rgba(255,255,255,.10);
-  --muted: #888;
-}
-body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  background: #000;
-  color: #fff;
-  height: 100vh;
-  overflow: hidden;
-  display: flex;
-}
-#sidebar {
-  width: 220px;
-  height: 100vh;
-  flex-shrink: 0;
-  background: rgba(10,10,10,.94);
-  border-right: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  padding: 18px 12px;
-  z-index: 10;
-}
-.brand {
-  padding: 8px 12px 24px;
-  font-size: 18px;
-  font-weight: 700;
-  letter-spacing: -.4px;
-}
-.brand-sub {
-  color: #666;
-  font-size: 10px;
-  font-weight: 500;
-  margin-top: 3px;
-}
-.side-label {
-  color: #555;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 1.2px;
-  padding: 0 12px 8px;
-}
-.side-nav {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-.side-btn {
-  width: 100%;
-  border: 1px solid transparent;
-  background: transparent;
-  color: #aaa;
-  text-align: left;
-  padding: 11px 12px;
-  border-radius: 9px;
-  cursor: pointer;
-  font: inherit;
-  font-size: 13px;
-  transition: .18s ease;
-}
-.side-btn:hover {
-  color: #fff;
-  background: var(--surface-hover);
-  border-color: var(--border);
-}
-.side-btn.active {
-  color: #fff;
-  background: rgba(255,255,255,.09);
-  border-color: rgba(255,255,255,.16);
-}
-.side-bottom {
-  margin-top: auto;
-}
-.home-side {
-  color: #fff;
-  border-color: var(--border);
-  background: var(--surface);
-}
-#main {
-  min-width: 0;
-  flex: 1;
-  height: 100vh;
-  position: relative;
-}
-#topbar {
-  height: 52px;
-  display: flex;
-  align-items: center;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--border);
-  background: rgba(5,5,5,.72);
-  backdrop-filter: blur(12px);
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 5;
-}
-.page-title {
-  font-size: 13px;
-  color: #aaa;
-}
-#content {
-  padding: 72px 24px 24px;
-  overflow-y: auto;
-  height: 100%;
-}
-@media (max-width: 650px) {
-  #sidebar { width: 70px; padding: 12px 8px; }
-  .brand { font-size: 0; text-align: center; padding: 10px 4px 20px; }
-  .brand::before { content: "L"; font-size: 20px; }
-  .brand-sub, .side-label { display: none; }
-  .side-btn { text-align: center; font-size: 0; padding: 12px 5px; }
-  .side-btn::first-letter { font-size: 13px; }
-  #content { padding-left: 16px; padding-right: 16px; }
-}
+* { margin:0; padding:0; box-sizing:border-box; }
+:root { --bg:#000; --surface:rgba(16,16,16,.88); --surface-hover:rgba(28,28,28,.96); --border:rgba(255,255,255,.10); }
+html,body { width:100%; height:100%; }
+body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:#000; color:#fff; overflow:hidden; display:flex; }
+#sidebar { width:220px; height:100vh; flex-shrink:0; background:rgba(10,10,10,.94); border-right:1px solid var(--border); display:flex; flex-direction:column; padding:18px 12px; z-index:10; }
+.brand { padding:8px 12px 24px; font-size:18px; font-weight:700; }
+.brand-sub { color:#666; font-size:10px; margin-top:3px; }
+.side-label { color:#555; font-size:10px; font-weight:700; letter-spacing:1.2px; padding:0 12px 8px; }
+.side-nav { display:flex; flex-direction:column; gap:5px; }
+.side-btn { width:100%; border:1px solid transparent; background:transparent; color:#aaa; text-align:left; padding:11px 12px; border-radius:9px; cursor:pointer; font:inherit; font-size:13px; }
+.side-btn:hover,.side-btn.active { color:#fff; background:rgba(255,255,255,.09); border-color:var(--border); }
+.side-bottom { margin-top:auto; }
+.home-side { color:#fff; border-color:var(--border); background:var(--surface); }
+#main { min-width:0; flex:1; height:100vh; position:relative; }
+#topbar { height:52px; display:flex; align-items:center; padding:0 16px; border-bottom:1px solid var(--border); background:rgba(5,5,5,.72); backdrop-filter:blur(12px); position:absolute; top:0; left:0; right:0; z-index:5; }
+.page-title { font-size:13px; color:#aaa; }
+#content { padding:72px 24px 24px; overflow-y:auto; height:100%; }
+@media(max-width:650px){#sidebar{width:70px;padding:12px 8px}.brand{font-size:0;text-align:center;padding:10px 4px 20px}.brand::before{content:"L";font-size:20px}.brand-sub,.side-label{display:none}.side-btn{text-align:center;font-size:0;padding:12px 5px}.side-btn::first-letter{font-size:13px}#content{padding-left:16px;padding-right:16px}}
 </style>
 </head>
 <body>
@@ -1239,11 +1152,8 @@ body {
     <button class="side-btn ${page === "emulator" ? "active" : ""}" onclick="window.location.href='/page/emulator'">Emulator</button>
     <button class="side-btn ${page === "ai" ? "active" : ""}" onclick="window.location.href='/page/ai'">AI</button>
   </nav>
-  <div class="side-bottom">
-    <button class="side-btn home-side" onclick="window.location.href='/'">Back to Home</button>
-  </div>
+  <div class="side-bottom"><button class="side-btn home-side" onclick="window.location.href='/'">Back to Home</button></div>
 </aside>
-
 <main id="main">
   <div id="topbar"><div class="page-title">Lunar Proxy / ${page.charAt(0).toUpperCase() + page.slice(1)}</div></div>
   <div id="content">${content}</div>
@@ -1251,7 +1161,7 @@ body {
 </body>
 </html>`;
 
-return c.html(html);
+  return c.html(html);
 });
 
 // ─── HOME PAGE ──────────────────────────────────────────────────────
@@ -1267,7 +1177,7 @@ ${LUNAR_CHROME}
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
- {
+:root {
 --bg: #000;
 --surface: rgba(17, 17, 17, 0.78);
 --surface-hover: rgba(28, 28, 28, 0.92);
@@ -1666,7 +1576,7 @@ function search() {
   if (isProbablyUrl(query)) {
     dest = /^https?:\/\//i.test(query) ? query : 'https://' + query;
   } else if (activeEngine === 'google') {
-    dest = engines.googleLite + encodeURIComponent(query);
+    dest = engines.google + encodeURIComponent(query);
   } else {
     dest = engines[activeEngine] + encodeURIComponent(query);
   }
