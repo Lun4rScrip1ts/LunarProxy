@@ -377,7 +377,7 @@ app.get("/view", (c) => {
     ) {
       const id =
         target.searchParams.get("v") ||
-        (target.pathname.match(/(?:shorts|embed)\\/([^/]+)/) || [])[1] ||
+        (target.pathname.match(/(?:shorts|embed)\/([^/]+)/) || [])[1] ||
         (target.hostname.includes("youtu.be")
           ? target.pathname.slice(1)
           : "");
@@ -390,7 +390,7 @@ app.get("/view", (c) => {
     }
 
     if (target.hostname.includes("tiktok.com")) {
-      const match = target.pathname.match(/\\/video\\/(\\d+)/);
+      const match = target.pathname.match(/\/video\/(\d+)/);
       if (match) {
         return c.redirect("/embed/tiktok?v=" + encodeURIComponent(match[1]));
       }
