@@ -416,27 +416,53 @@ app.get("/view", (c) => {
 </div>`;
 
   const script = `<script>
-const bar=document.getElementById("urlbar");
-const frame=document.getElementById("viewerFrame");
-const loading=document.getElementById("loading");
+const bar = document.getElementById("urlbar");
+const frame = document.getElementById("viewerFrame");
+const loading = document.getElementById("loading");
 
 function go(){
-  const v=bar.value.trim();
-  if(!v)return;
-  const dest=/^https?:\\/\\//i.test(v)?v:"https://"+v;
-  location.href="/view?url="+encodeURIComponent(dest);
+  const v = bar.value.trim();
+  if (!v) return;
+
+  let dest;
+
+  // Full URL
+  if (/^https?:\/\//i.test(v)) {
+    dest = v;
+  }
+  // Looks like a domain
+  else if (
+    v.includes(".") &&
+    !v.includes(" ") &&
+    /^[a-z0-9.-]+\.[a-z]{2,}(\/.*)?$/i.test(v)
+  ) {
+    dest = "https://" + v;
+  }
+  // Search query
+  else {
+    dest =
+      "https://html.duckduckgo.com/html/?q=" +
+      encodeURIComponent(v);
+  }
+
+  location.href = "/view?url=" + encodeURIComponent(dest);
 }
 
 function reloadViewer(){
-  loading.style.display="block";
-  frame.src=frame.src;
+  loading.style.display = "block";
+  frame.src = frame.src;
 }
 
-bar.addEventListener("keydown",e=>{
-  if(e.key==="Enter"){e.preventDefault();go();}
+bar.addEventListener("keydown", e => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    go();
+  }
 });
 
-frame.addEventListener("load",()=>loading.style.display="none");
+frame.addEventListener("load", () => {
+  loading.style.display = "none";
+});
 </script>`;
 
   return c.html(layout("Viewer", content, script));
