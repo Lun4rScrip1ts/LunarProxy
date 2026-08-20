@@ -426,11 +426,9 @@ function go(){
 
   let dest;
 
-  // Full URL
   if (/^https?:\/\//i.test(v)) {
     dest = v;
   }
-  // Looks like a domain
   else if (
     v.includes(".") &&
     !v.includes(" ") &&
@@ -438,10 +436,9 @@ function go(){
   ) {
     dest = "https://" + v;
   }
-  // Search query
   else {
     dest =
-      "https://html.duckduckgo.com/html/?q=" +
+      "https://duckduckgo.com/?q=" +
       encodeURIComponent(v);
   }
 
