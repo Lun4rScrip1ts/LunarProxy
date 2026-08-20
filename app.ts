@@ -527,18 +527,24 @@ function rewriteTextUrls(text: string, baseHref: string) {
 }
 
 app.all("/proxy", async (c) => {
-let targetUrl = c.req.query("url");
-if (!targetUrl) return c.json({ error: "URL required" }, 400);
+  let targetUrl = c.req.query("url");
 
-try {
-if (!/^https?:///i.test(targetUrl) && /%3A%2F%2F/i.test(targetUrl)) {
-targetUrl = decodeURIComponent(targetUrl);
-}
-} catch {}
+  if (!targetUrl) {
+    return c.json({ error: "URL required" }, 400);
+  }
 
-try {
-if (!/^https?:///i.test(targetUrl)) targetUrl = "https://" + targetUrl;
-const target = new URL(targetUrl);
+  try {
+    if (!/^https?:\/\//i.test(targetUrl) && /%3A%2F%2F/i.test(targetUrl)) {
+      targetUrl = decodeURIComponent(targetUrl);
+    }
+  } catch {}
+
+  try {
+    if (!/^https?:\/\//i.test(targetUrl)) {
+      targetUrl = "https://" + targetUrl;
+    }
+
+    const target = new URL(targetUrl);
 
 const incomingUrl = new URL(c.req.url);
 for (const [key, value] of incomingUrl.searchParams) {
