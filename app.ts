@@ -1567,20 +1567,39 @@ function isProbablyUrl(value) {
 
 function search() {
   const input = document.getElementById('searchInput');
+
+  if (!input) {
+    console.error('Lunar: search input not found');
+    return;
+  }
+
   const query = input.value.trim();
+
   if (!query) {
     input.focus();
     return;
   }
-  let dest;
+
+  let dest = '';
+
   if (isProbablyUrl(query)) {
-    dest = /^https?:\/\//i.test(query) ? query : 'https://' + query;
-  } else if (activeEngine === 'google') {
-    dest = engines.google + encodeURIComponent(query);
+    dest = /^https?:\/\//i.test(query)
+      ? query
+      : 'https://' + query;
   } else {
-    dest = engines[activeEngine] + encodeURIComponent(query);
+    if (activeEngine === 'google') {
+      dest = 'https://www.google.com/search?q=' + encodeURIComponent(query);
+    } else if (activeEngine === 'bing') {
+      dest = 'https://www.bing.com/search?q=' + encodeURIComponent(query);
+    } else {
+      dest = 'https://html.duckduckgo.com/html/?q=' + encodeURIComponent(query);
+    }
   }
-  window.location.href = '/view?url=' + encodeURIComponent(dest);
+
+  console.log('Lunar search:', dest);
+
+  window.location.href =
+    '/view?url=' + encodeURIComponent(dest);
 }
 
 function loadViewer(url) {
