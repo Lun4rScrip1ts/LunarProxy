@@ -160,27 +160,36 @@ return "/proxy?url=" + encodeURIComponent(abs);
 
 // ─── VIEWER ─────────────────────────────────────────────────────────
 app.get("/view", (c) => {
-const targetUrl = c.req.query("url") || "";
-let decoded = targetUrl;
-try { decoded = decodeURIComponent(targetUrl); } catch { decoded = targetUrl; }
+  const targetUrl = c.req.query("url") || "";
+  let decoded = targetUrl;
 
-// Use first-party embedded players for supported video URLs. This avoids
-// fighting the anti-bot/client-side internals of those platforms while still
-// keeping the player inside Lunar.
-const youtubeMatch =
-decoded.match(/(?.com/(??v=|shorts/|embed/)|youtu.be/)([A-Za-z0-9_-]{6,})/i);
-if (youtubeMatch) {
-return c.redirect("/embed/youtube/watch?v=" + encodeURIComponent(youtubeMatch[1]));
-}
+  try {
+    decoded = decodeURIComponent(targetUrl);
+  } catch {
+    decoded = targetUrl;
+  }
 
-const tiktokMatch =
-decoded.match(/tiktok.com/@[^/]+/video/(\d+)/i) ||
-decoded.match(/tiktok.com/player/v1/(\d+)/i);
-if (tiktokMatch) {
-return c.redirect("/embed/tiktok?v=" + encodeURIComponent(tiktokMatch[1]));
-}
+  // Use first-party embedded players for supported video URLs.
+  const youtubeMatch =
+    decoded.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{6,})/i);
 
-const html = `<!DOCTYPE html>
+  if (youtubeMatch) {
+    return c.redirect(
+      "/embed/youtube/watch?v=" + encodeURIComponent(youtubeMatch[1])
+    );
+  }
+
+  const tiktokMatch =
+    decoded.match(/tiktok\.com\/@[^/]+\/video\/(\d+)/i) ||
+    decoded.match(/tiktok\.com\/player\/v1\/(\d+)/i);
+
+  if (tiktokMatch) {
+    return c.redirect(
+      "/embed/tiktok?v=" + encodeURIComponent(tiktokMatch[1])
+    );
+  }
+
+  const html = `<!DOCTYPE html>
 
 <html lang="en">
 <head>
