@@ -2,14 +2,37 @@ import { Hono } from "hono";
 
 const app = new Hono();
 
-const USER_AGENT = process.env.USER_AGENT ||
+const USER_AGENT =
+  process.env.USER_AGENT ||
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/146.0.0.0 Safari/537.36";
+
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.6-luna";
+
+type ChatMessage = {
+  id: number;
+  name: string;
+  text: string;
+  time: number;
+};
+
+let chatMessages: ChatMessage[] = [];
+let nextChatId = 1;
 
 const SEARCH_ENGINES: Record<string, string> = {
   duckduckgo: "https://html.duckduckgo.com/html/?q=",
   bing: "https://www.bing.com/search?q=",
   google: "https://www.google.com/search?q=",
 };
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 
 function isSafeTarget(url: URL) {
   const host = url.hostname.toLowerCase();
@@ -19,7 +42,8 @@ function isSafeTarget(url: URL) {
     host === "0.0.0.0" ||
     host === "::1" ||
     host.endsWith(".local") ||
-    host.endsWith(".internal")
+    host.endsWith(".internal") ||
+    host.endsWith(".localhost")
   );
 }
 
@@ -32,138 +56,424 @@ function absoluteUrl(value: string, base: string) {
 }
 
 function proxyUrl(value: string, base: string) {
-  if (!value || /^(?:#|javascript:|mailto:|tel:|data:|blob:|about:)/i.test(value)) {
+  if (
+    !value ||
+    /^(?:#|javascript:|mailto:|tel:|data:|blob:|about:|chrome:)/i.test(value)
+  ) {
     return value;
   }
 
   const absolute = absoluteUrl(value, base);
   if (!/^https?:\/\//i.test(absolute)) return value;
+
   return "/proxy?url=" + encodeURIComponent(absolute);
 }
 
 function rewriteHtml(html: string, base: string) {
   let out = html;
 
-  // Make relative URLs resolve against the original site.
   if (!/<base\s/i.test(out)) {
-    out = out.replace(/<head([^>]*)>/i, `<head$1><base href="${base.replace(/"/g, "&quot;")}">`);
+    out = out.replace(
+      /<head([^>]*)>/i,
+      `<head$1><base href="${escapeHtml(base)}">`
+    );
   }
 
-  out = out.replace(/\b(?:href|src|poster|action|data-src|data-original|data-lazy-src)\s*=\s*(["'])(.*?)\1/gi,
+  out = out.replace(
+    /\b(?:href|src|poster|action|data-src|data-original|data-lazy-src)\s*=\s*(["'])(.*?)\1/gi,
     (match, quote, value) => {
-      if (/^(?:#|javascript:|mailto:|tel:|data:|blob:|about:)/i.test(value)) return match;
+      if (
+        /^(?:#|javascript:|mailto:|tel:|data:|blob:|about:|chrome:)/i.test(
+          value
+        )
+      ) {
+        return match;
+      }
       return match.replace(value, proxyUrl(value, base));
-    });
+    }
+  );
 
-  out = out.replace(/\bsrcset\s*=\s*(["'])(.*?)\1/gi, (match, quote, value) => {
-    const rewritten = value.split(",").map((item: string) => {
-      const parts = item.trim().split(/\s+/);
-      if (!parts[0]) return item;
-      parts[0] = proxyUrl(parts[0], base);
-      return parts.join(" ");
-    }).join(", ");
-    return `srcset=${quote}${rewritten}${quote}`;
-  });
+  out = out.replace(
+    /\bsrcset\s*=\s*(["'])(.*?)\1/gi,
+    (match, quote, value) => {
+      const rewritten = value
+        .split(",")
+        .map((item: string) => {
+          const parts = item.trim().split(/\s+/);
+          if (!parts[0]) return item;
+          parts[0] = proxyUrl(parts[0], base);
+          return parts.join(" ");
+        })
+        .join(", ");
 
-  out = out.replace(/url\(\s*(["']?)([^"')\s]+)\1\s*\)/gi, (match, quote, value) => {
-    if (/^(?:data:|blob:|about:)/i.test(value)) return match;
-    return `url("${proxyUrl(value, base)}")`;
-  });
+      return `srcset=${quote}${rewritten}${quote}`;
+    }
+  );
 
-  // Keep simple navigation/forms inside Lunar.
-  out = out.replace(/<script([^>]*)src\s*=\s*(["'])(.*?)\2([^>]*)>/gi,
-    (match, before, quote, value, after) => `<script${before}src=${quote}${proxyUrl(value, base)}${quote}${after}>`);
+  out = out.replace(
+    /url\(\s*(["']?)([^"')\s]+)\1\s*\)/gi,
+    (match, quote, value) => {
+      if (/^(?:data:|blob:|about:)/i.test(value)) return match;
+      return `url("${proxyUrl(value, base)}")`;
+    }
+  );
+
+  out = out.replace(
+    /<script([^>]*)\ssrc\s*=\s*(["'])(.*?)\2([^>]*)>/gi,
+    (match, before, quote, value, after) =>
+      `<script${before} src=${quote}${proxyUrl(value, base)}${quote}${after}>`
+  );
 
   return out;
 }
 
 function upstreamHeaders(c: any, target: URL) {
   const headers = new Headers();
+
   headers.set("User-Agent", USER_AGENT);
-  headers.set("Accept", c.req.header("accept") || "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
-  headers.set("Accept-Language", c.req.header("accept-language") || "en-US,en;q=0.9");
+  headers.set(
+    "Accept",
+    c.req.header("accept") ||
+      "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+  );
+  headers.set(
+    "Accept-Language",
+    c.req.header("accept-language") || "en-US,en;q=0.9"
+  );
   headers.set("Referer", target.origin + "/");
   headers.set("Accept-Encoding", "identity");
 
   const contentType = c.req.header("content-type");
   if (contentType) headers.set("Content-Type", contentType);
 
-  const cookie = c.req.header("cookie");
-  if (cookie) headers.set("Cookie", cookie);
-
   return headers;
 }
 
-// Health check.
-app.get("/health", (c) => c.json({ ok: true, service: "Lunar Proxy" }));
-
-// ─── EMBEDS ──────────────────────────────────────────────────────────
-app.get("/embed/youtube", (c) => c.html(`<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>YouTube - Lunar</title>
-<style>html,body{margin:0;height:100%;background:#000;color:#fff;font-family:system-ui}.wrap{height:100%;display:flex;flex-direction:column}.top{height:52px;display:flex;align-items:center;gap:12px;padding:0 16px;background:#111;border-bottom:1px solid #222}.top a{color:#fff;text-decoration:none}.box{flex:1;display:grid;place-items:center;padding:20px}.card{width:min(720px,100%);text-align:center}.card input{width:70%;max-width:500px;padding:12px;border-radius:8px;border:1px solid #333;background:#181818;color:#fff}.card button{padding:12px 18px;margin-left:8px;border:0;border-radius:8px;cursor:pointer}.hint{color:#888;font-size:13px}</style></head>
-<body><div class="wrap"><div class="top"><a href="/">← Lunar</a><b>YouTube</b></div><div class="box"><div class="card"><h1>YouTube Player</h1><p class="hint">Paste a YouTube URL or video ID.</p><input id="yt" placeholder="https://youtube.com/watch?v=..."><button id="go">Play</button></div></div></div>
+const CHROME = `
+<style id="lunar-chrome">
+*{box-sizing:border-box}
+html,body{scrollbar-width:thin;scrollbar-color:#333 #080808}
+.lunar-cursor{position:fixed;left:0;top:0;width:22px;height:22px;pointer-events:none;z-index:2147483647;opacity:0;transform:translate3d(-100px,-100px,0);transition:opacity .15s;filter:drop-shadow(0 0 7px rgba(255,255,255,.45))}
+.lunar-cursor:before{content:"";position:absolute;left:2px;top:2px;width:18px;height:18px;border-radius:50%;background:#fff}
+.lunar-cursor:after{content:"";position:absolute;left:8px;top:-1px;width:18px;height:18px;border-radius:50%;background:#000}
+@media(pointer:coarse){.lunar-cursor{display:none!important}}
+</style>
+<div class="lunar-cursor" id="lunarCursor"></div>
 <script>
-function idFrom(value){const s=value.trim(); if(/^[A-Za-z0-9_-]{6,}$/.test(s)) return s; try{const u=new URL(s); if(u.hostname.includes('youtu.be')) return u.pathname.slice(1); return u.searchParams.get('v') || (u.pathname.match(/(?:shorts|embed)\/([^/]+)/)||[])[1] || '';}catch{return ''}}
-document.getElementById('go').onclick=()=>{const id=idFrom(document.getElementById('yt').value); if(!id)return alert('Enter a YouTube URL or video ID.'); location.href='/embed/youtube/watch?v='+encodeURIComponent(id)};
-document.getElementById('yt').onkeydown=e=>{if(e.key==='Enter')document.getElementById('go').click()};
-</script></body></html>`));
+(function(){
+ if(window.__lunarCursor)return;
+ window.__lunarCursor=true;
+ const c=document.getElementById("lunarCursor");
+ if(!c||matchMedia("(pointer:coarse)").matches)return;
+ let tx=-100,ty=-100,x=-100,y=-100,started=false;
+ function loop(){
+   x+=(tx-x)*.25;y+=(ty-y)*.25;
+   c.style.transform="translate3d("+(x-11)+"px,"+(y-11)+"px,0)";
+   requestAnimationFrame(loop);
+ }
+ addEventListener("mousemove",function(e){
+   tx=e.clientX;ty=e.clientY;
+   if(!started){x=tx;y=ty;started=true;c.style.opacity="1";}
+ },{passive:true});
+ addEventListener("mouseleave",function(){c.style.opacity="0"});
+ loop();
+})();
+</script>`;
 
-app.get("/embed/youtube/watch", (c) => {
-  const id = c.req.query("v") || "";
-  if (!/^[A-Za-z0-9_-]{6,}$/.test(id)) return c.redirect("/embed/youtube");
-  return c.html(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>YouTube - Lunar</title><style>html,body{margin:0;height:100%;background:#000}.top{height:52px;background:#111;color:#fff;display:flex;align-items:center;padding:0 16px;font-family:system-ui}.top a{color:#fff;text-decoration:none;margin-right:16px}.frame{height:calc(100vh - 52px)}iframe{width:100%;height:100%;border:0}</style></head><body><div class="top"><a href="/embed/youtube">← Back</a><a href="/">Lunar</a></div><div class="frame"><iframe src="https://www.youtube.com/embed/${encodeURIComponent(id)}?autoplay=1" allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen></iframe></div></body></html>`);
+const SIDEBAR = `
+<aside class="sidebar">
+  <div class="brand"><span>☾</span> Lunar</div>
+  <button class="nav" onclick="location.href='/'">⌂ <span>Home</span></button>
+  <button class="nav" onclick="location.href='/page/games'">🎮 <span>Games</span></button>
+  <button class="nav" onclick="location.href='/page/media'">▶ <span>Media</span></button>
+  <button class="nav" onclick="location.href='/page/chat'">💬 <span>Chat</span></button>
+  <button class="nav" onclick="location.href='/page/emulator'">🕹 <span>Emulator</span></button>
+  <button class="nav" onclick="location.href='/page/ai'">✦ <span>AI</span></button>
+</aside>`;
+
+const BASE_STYLE = `
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;background:#050505;color:#fff;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+button,input{font:inherit}
+button{cursor:pointer}
+body:before{content:"";position:fixed;inset:0;pointer-events:none;background-image:radial-gradient(circle at 15% 20%,rgba(255,255,255,.08) 0 1px,transparent 1px),radial-gradient(circle at 80% 70%,rgba(255,255,255,.06) 0 1px,transparent 1px);background-size:130px 130px,190px 190px;opacity:.45}
+.shell{min-height:100vh;display:flex;position:relative}
+.sidebar{width:205px;flex:0 0 205px;background:rgba(10,10,10,.94);border-right:1px solid #202020;padding:18px 12px;position:sticky;top:0;height:100vh;z-index:10}
+.brand{font-size:21px;font-weight:750;padding:8px 12px 24px;letter-spacing:.2px}
+.brand span{margin-right:7px}
+.nav{display:flex;align-items:center;gap:12px;width:100%;padding:11px 12px;margin:4px 0;border:1px solid transparent;border-radius:10px;background:transparent;color:#999;text-align:left;transition:.16s}
+.nav:hover{background:#161616;color:#fff;border-color:#242424;transform:translateX(2px)}
+.main{flex:1;min-width:0;position:relative}
+.center{min-height:100vh;display:grid;place-items:center;padding:40px}
+.box{width:min(820px,100%);text-align:center}
+.logo{font-size:70px;line-height:1;text-shadow:0 0 30px rgba(255,255,255,.22);animation:float 4s ease-in-out infinite}
+@keyframes float{50%{transform:translateY(-7px)}}
+h1{font-size:38px;margin:14px 0 8px}
+.subtitle,p{color:#858585}
+.search{display:flex;gap:9px;margin:30px auto 14px}
+.search input{flex:1;min-width:0;height:52px;background:#101010;border:1px solid #292929;border-radius:12px;color:#fff;padding:0 16px;outline:none;transition:.15s}
+.search input:focus{border-color:#555;box-shadow:0 0 0 3px rgba(255,255,255,.04)}
+.search button,.primary{height:52px;border:0;border-radius:12px;background:#fff;color:#000;padding:0 22px;font-weight:700}
+.engines,.shortcuts{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
+.engine,.shortcut{border:1px solid #242424;background:#101010;color:#999;border-radius:9px;padding:9px 13px;transition:.15s}
+.engine.active,.engine:hover,.shortcut:hover{color:#fff;border-color:#555;transform:translateY(-1px)}
+.note{color:#555;font-size:12px;margin-top:25px}
+.page{padding:46px;max-width:1200px;margin:auto}
+.page h1{font-size:34px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:15px;margin-top:26px}
+.card{background:#101010;color:#fff;border:1px solid #242424;border-radius:15px;padding:25px;text-align:center;transition:.18s}
+.card:hover{border-color:#555;transform:translateY(-4px);box-shadow:0 12px 35px rgba(0,0,0,.35)}
+.card .icon{font-size:42px}
+.card h3{margin:12px 0 6px}
+.card p{font-size:13px}
+.chatbox{height:58vh;min-height:300px;background:#0b0b0b;border:1px solid #242424;border-radius:14px;padding:14px;overflow:auto}
+.msg{padding:10px 12px;background:#131313;border:1px solid #202020;border-radius:10px;margin-bottom:9px}
+.msg b{font-size:13px}
+.msg small{float:right;color:#555}
+.chatrow{display:flex;gap:8px;margin-top:10px}
+.chatrow input,.ai-input{flex:1;background:#101010;color:#fff;border:1px solid #292929;border-radius:10px;padding:13px;outline:none}
+.chatrow button{border:0;border-radius:10px;padding:0 20px;background:#fff;color:#000;font-weight:700}
+.ai-panel{background:#0b0b0b;border:1px solid #242424;border-radius:14px;padding:16px}
+.ai-messages{height:55vh;min-height:320px;overflow:auto;padding:8px}
+.ai-msg{max-width:85%;padding:12px 14px;border-radius:12px;margin:8px 0;white-space:pre-wrap;line-height:1.5}
+.ai-user{margin-left:auto;background:#fff;color:#000}
+.ai-assistant{background:#151515;border:1px solid #242424}
+.ai-row{display:flex;gap:8px;margin-top:10px}
+.ai-send{border:0;border-radius:10px;background:#fff;color:#000;padding:0 20px;font-weight:700}
+.status{font-size:12px;color:#666;margin:8px 2px}
+.topbar{height:58px;display:flex;gap:8px;align-items:center;padding:0 12px;background:#101010;border-bottom:1px solid #222}
+.btn{height:35px;border:1px solid #303030;border-radius:9px;background:#111;color:#fff;padding:0 12px}
+.url{height:37px;flex:1;min-width:0;background:#050505;border:1px solid #303030;color:#fff;border-radius:9px;padding:0 12px;outline:none}
+.viewer{height:calc(100vh - 58px);position:relative}
+.viewer iframe{width:100%;height:100%;border:0;display:block}
+.loading{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:#777;pointer-events:none}
+@media(max-width:700px){.sidebar{width:64px;flex-basis:64px;padding:10px 7px}.brand{font-size:0;text-align:center}.brand span{font-size:23px}.nav{justify-content:center;padding:11px 5px}.nav span{display:none}.page{padding:28px 18px}.center{padding:24px 14px}.search{flex-direction:column}.search button{width:100%}h1{font-size:30px}}
+</style>`;
+
+function layout(title: string, content: string, script = "") {
+  return `<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escapeHtml(title)} — Lunar</title>${BASE_STYLE}</head><body>
+${CHROME}<div class="shell">${SIDEBAR}<main class="main">${content}</main></div>
+${script}</body></html>`;
+}
+
+function categoryCard(
+  title: string,
+  icon: string,
+  description: string,
+  url: string
+) {
+  return `<button class="card" onclick="location.href='/view?url=${encodeURIComponent(
+    url
+  )}'"><div class="icon">${icon}</div><h3>${escapeHtml(
+    title
+  )}</h3><p>${escapeHtml(description)}</p></button>`;
+}
+
+app.get("/health", (c) =>
+  c.json({ ok: true, service: "Lunar Proxy", time: Date.now() })
+);
+
+// ----------------------------- HOME -----------------------------
+
+app.get("/", (c) => {
+  const content = `
+<div class="center"><div class="box">
+  <div class="logo">☾</div>
+  <h1>Lunar Proxy</h1>
+  <p class="subtitle">Search the web or enter a website address.</p>
+
+  <div class="search">
+    <input id="searchInput" placeholder="Search or enter URL..." autocomplete="off" spellcheck="false">
+    <button id="searchButton" type="button">Search</button>
+  </div>
+
+  <div class="engines">
+    <button class="engine active" data-engine="duckduckgo">DuckDuckGo</button>
+    <button class="engine" data-engine="bing">Bing</button>
+    <button class="engine" data-engine="google">Google</button>
+  </div>
+
+  <div class="shortcuts" style="margin-top:20px">
+    <button class="shortcut" data-url="https://www.youtube.com">▶ YouTube</button>
+    <button class="shortcut" data-url="https://www.tiktok.com">TikTok</button>
+    <button class="shortcut" data-url="https://www.reddit.com">Reddit</button>
+    <button class="shortcut" data-url="https://www.instagram.com">Instagram</button>
+  </div>
+
+  <div class="note">Some sites can block server-side proxying. Lunar cannot override a site's own access restrictions.</div>
+</div></div>`;
+
+  const script = `<script>
+(function(){
+  const input=document.getElementById("searchInput");
+  const button=document.getElementById("searchButton");
+  let engine="duckduckgo";
+
+  function isUrl(v){
+    return /^https?:\\/\\//i.test(v) ||
+      (!v.includes(" ") && v.includes(".") && v.length>3);
+  }
+
+  function search(){
+    const value=input.value.trim();
+    if(!value){input.focus();return;}
+
+    let destination;
+    if(isUrl(value)){
+      destination=/^https?:\\/\\//i.test(value)?value:"https://"+value;
+    }else{
+      destination=${JSON.stringify(SEARCH_ENGINES)}[engine]+encodeURIComponent(value);
+    }
+
+    location.href="/view?url="+encodeURIComponent(destination);
+  }
+
+  button.addEventListener("click",search);
+  input.addEventListener("keydown",e=>{
+    if(e.key==="Enter"){e.preventDefault();search();}
+  });
+
+  document.querySelectorAll(".engine").forEach(el=>{
+    el.addEventListener("click",()=>{
+      engine=el.dataset.engine||"duckduckgo";
+      document.querySelectorAll(".engine").forEach(x=>x.classList.remove("active"));
+      el.classList.add("active");
+      input.focus();
+    });
+  });
+
+  document.querySelectorAll(".shortcut").forEach(el=>{
+    el.addEventListener("click",()=>{
+      const u=el.dataset.url;
+      if(u) location.href="/view?url="+encodeURIComponent(u);
+    });
+  });
+})();
+</script>`;
+
+  return c.html(layout("Home", content, script));
 });
 
-app.get("/embed/tiktok", (c) => {
-  const id = c.req.query("v") || "";
-  if (!/^\d+$/.test(id)) return c.redirect("/");
-  return c.html(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TikTok - Lunar</title><style>html,body{margin:0;height:100%;background:#000;color:#fff;font-family:system-ui}.top{height:52px;background:#111;display:flex;align-items:center;padding:0 16px;gap:16px}.top a{color:#fff;text-decoration:none}.frame{height:calc(100vh - 52px);display:grid;place-items:center}.frame iframe{width:min(100%,700px);height:100%;border:0}</style></head><body><div class="top"><a href="/">← Lunar</a><b>TikTok</b></div><div class="frame"><iframe src="https://www.tiktok.com/player/v1/${id}?controls=1&description=1&music_info=1&fullscreen_button=1" allow="fullscreen; autoplay" allowfullscreen></iframe></div></body></html>`);
-});
+// ----------------------------- VIEWER -----------------------------
 
-// ─── VIEWER ──────────────────────────────────────────────────────────
 app.get("/view", (c) => {
-  const raw = c.req.query("url") || "";
-  let decoded = raw;
-  try { decoded = decodeURIComponent(raw); } catch {}
+  let decoded = c.req.query("url") || "";
+  try {
+    decoded = decodeURIComponent(decoded);
+  } catch {}
 
   if (!decoded) return c.redirect("/");
   if (!/^https?:\/\//i.test(decoded)) decoded = "https://" + decoded;
 
   try {
     const target = new URL(decoded);
-    const yt = target.hostname.includes("youtube.com") || target.hostname.includes("youtu.be");
-    if (yt) {
-      const id = target.searchParams.get("v") || (target.pathname.match(/(?:shorts|embed)\/([^/]+)/)||[])[1] || (target.hostname.includes("youtu.be") ? target.pathname.slice(1) : "");
-      if (id) return c.redirect("/embed/youtube/watch?v=" + encodeURIComponent(id));
+
+    if (
+      target.hostname.includes("youtube.com") ||
+      target.hostname.includes("youtu.be")
+    ) {
+      const id =
+        target.searchParams.get("v") ||
+        (target.pathname.match(/(?:shorts|embed)\\/([^/]+)/) || [])[1] ||
+        (target.hostname.includes("youtu.be")
+          ? target.pathname.slice(1)
+          : "");
+
+      if (id && /^[A-Za-z0-9_-]{6,}$/.test(id)) {
+        return c.redirect(
+          "/embed/youtube/watch?v=" + encodeURIComponent(id)
+        );
+      }
     }
-    const tt = target.hostname.includes("tiktok.com");
-    const m = target.pathname.match(/\/video\/(\d+)/);
-    if (tt && m) return c.redirect("/embed/tiktok?v=" + encodeURIComponent(m[1]));
+
+    if (target.hostname.includes("tiktok.com")) {
+      const match = target.pathname.match(/\\/video\\/(\\d+)/);
+      if (match) {
+        return c.redirect("/embed/tiktok?v=" + encodeURIComponent(match[1]));
+      }
+    }
   } catch {}
 
-  const safeValue = decoded.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const safe = escapeHtml(decoded);
 
-  return c.html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lunar Viewer</title><style>*{box-sizing:border-box}html,body{margin:0;height:100%;background:#000;color:#fff;font-family:system-ui}.shell{height:100%;display:flex}.side{width:190px;flex:none;background:#0a0a0a;border-right:1px solid #222;padding:16px}.brand{font-weight:700;font-size:20px;margin:6px 8px 20px}.nav{display:block;width:100%;padding:10px;border:0;border-radius:8px;background:transparent;color:#aaa;text-align:left;cursor:pointer;margin:3px 0}.nav:hover{background:#171717;color:#fff}.main{min-width:0;flex:1;display:flex;flex-direction:column}.bar{height:56px;display:flex;gap:8px;align-items:center;padding:0 12px;background:#111;border-bottom:1px solid #222}.btn{height:34px;padding:0 12px;background:#111;color:#fff;border:1px solid #333;border-radius:8px;cursor:pointer}.url{flex:1;min-width:0;height:36px;background:#000;color:#fff;border:1px solid #333;border-radius:8px;padding:0 12px;outline:none}.frame{position:relative;flex:1}.frame iframe{width:100%;height:100%;border:0}.loading{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:#888;pointer-events:none}</style></head><body><div class="shell"><aside class="side"><div class="brand">Lunar</div><button class="nav" onclick="location.href='/'">Home</button><button class="nav" onclick="location.href='/page/games'">Games</button><button class="nav" onclick="location.href='/page/media'">Media</button><button class="nav" onclick="location.href='/page/chat'">Chat</button><button class="nav" onclick="location.href='/page/emulator'">Emulator</button><button class="nav" onclick="location.href='/page/ai'">AI</button></aside><main class="main"><div class="bar"><button class="btn" onclick="history.back()">←</button><button class="btn" onclick="history.forward()">→</button><button class="btn" onclick="location.reload()">↻</button><input class="url" id="url" value="${safeValue}" autocomplete="off"><button class="btn" id="go">Go</button></div><div class="frame"><div class="loading" id="loading">Loading…</div><iframe id="viewer" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-top-navigation allow-downloads allow-modals allow-pointer-lock allow-presentation" allow="autoplay; encrypted-media; fullscreen; picture-in-picture; geolocation; microphone; camera" src="/proxy?url=${encodeURIComponent(decoded)}"></iframe></div></main></div><script>
-const input=document.getElementById('url');
-function go(){const v=input.value.trim();if(!v)return;let d=/^https?:\/\//i.test(v)?v:'https://'+v;location.href='/view?url='+encodeURIComponent(d)}
-document.getElementById('go').onclick=go;input.addEventListener('keydown',e=>{if(e.key==='Enter')go()});document.getElementById('viewer').addEventListener('load',()=>document.getElementById('loading').style.display='none');
-</script></body></html>`);
+  const content = `
+<div class="topbar">
+  <button class="btn" onclick="history.back()">←</button>
+  <button class="btn" onclick="history.forward()">→</button>
+  <button class="btn" onclick="reloadViewer()">↻</button>
+  <input class="url" id="urlbar" value="${safe}" autocomplete="off">
+  <button class="btn" onclick="go()">Go</button>
+</div>
+<div class="viewer">
+  <div class="loading" id="loading">Loading…</div>
+  <iframe id="viewerFrame"
+    sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-top-navigation allow-downloads allow-modals allow-pointer-lock allow-presentation"
+    allow="autoplay; encrypted-media; fullscreen; picture-in-picture; geolocation; microphone; camera"
+    src="/proxy?url=${encodeURIComponent(decoded)}"></iframe>
+</div>`;
+
+  const script = `<script>
+const bar=document.getElementById("urlbar");
+const frame=document.getElementById("viewerFrame");
+const loading=document.getElementById("loading");
+
+function go(){
+  const v=bar.value.trim();
+  if(!v)return;
+  const dest=/^https?:\\/\\//i.test(v)?v:"https://"+v;
+  location.href="/view?url="+encodeURIComponent(dest);
+}
+
+function reloadViewer(){
+  loading.style.display="block";
+  frame.src=frame.src;
+}
+
+bar.addEventListener("keydown",e=>{
+  if(e.key==="Enter"){e.preventDefault();go();}
 });
 
-// ─── PROXY ───────────────────────────────────────────────────────────
+frame.addEventListener("load",()=>loading.style.display="none");
+</script>`;
+
+  return c.html(layout("Viewer", content, script));
+});
+
+// ----------------------------- PROXY -----------------------------
+
 app.all("/proxy", async (c) => {
   let raw = c.req.query("url") || "";
   if (!raw) return c.json({ error: "URL required" }, 400);
 
-  try { raw = decodeURIComponent(raw); } catch {}
+  try {
+    raw = decodeURIComponent(raw);
+  } catch {}
+
   if (!/^https?:\/\//i.test(raw)) raw = "https://" + raw;
 
   let target: URL;
-  try { target = new URL(raw); } catch { return c.json({ error: "Invalid URL" }, 400); }
-  if (!isSafeTarget(target)) return c.json({ error: "Blocked target" }, 403);
+
+  try {
+    target = new URL(raw);
+  } catch {
+    return c.json({ error: "Invalid URL" }, 400);
+  }
+
+  if (!isSafeTarget(target)) {
+    return c.json({ error: "Blocked target" }, 403);
+  }
 
   const method = c.req.method.toUpperCase();
-  if (!["GET", "HEAD"].includes(method)) return c.json({ error: "Only GET and HEAD are supported by this simple proxy" }, 405);
+
+  if (!["GET", "HEAD"].includes(method)) {
+    return c.json(
+      { error: "This proxy currently supports GET and HEAD requests." },
+      405
+    );
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25000);
@@ -177,74 +487,496 @@ app.all("/proxy", async (c) => {
     });
 
     const headers = new Headers();
-    const pass = ["content-type", "content-language", "cache-control", "etag", "last-modified", "content-disposition"];
-    for (const name of pass) {
+
+    for (const name of [
+      "content-type",
+      "content-language",
+      "cache-control",
+      "etag",
+      "last-modified",
+      "content-disposition",
+    ]) {
       const value = response.headers.get(name);
       if (value) headers.set(name, value);
     }
+
     headers.set("X-Lunar-Upstream", target.hostname);
     headers.delete("content-encoding");
     headers.delete("content-length");
 
-    if (method === "HEAD") return new Response(null, { status: response.status, headers });
+    if (method === "HEAD") {
+      return new Response(null, {
+        status: response.status,
+        headers,
+      });
+    }
 
     const contentType = response.headers.get("content-type") || "";
-    if (contentType.includes("text/html") || contentType.includes("application/xhtml+xml")) {
+
+    if (
+      contentType.includes("text/html") ||
+      contentType.includes("application/xhtml+xml")
+    ) {
       const text = await response.text();
-      return new Response(rewriteHtml(text, target.href), { status: response.status, headers });
+      return new Response(rewriteHtml(text, target.href), {
+        status: response.status,
+        headers,
+      });
     }
 
     const buffer = await response.arrayBuffer();
-    return new Response(buffer, { status: response.status, headers });
+
+    return new Response(buffer, {
+      status: response.status,
+      headers,
+    });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Upstream request failed";
+    const message =
+      error instanceof Error ? error.message : "Upstream request failed";
+
     console.error("[lunar] proxy error:", target.href, message);
-    return c.json({ error: "Upstream request failed", message }, 502);
+
+    return c.json(
+      {
+        error: "Upstream request failed",
+        message,
+      },
+      502
+    );
   } finally {
     clearTimeout(timer);
   }
 });
 
-// ─── CATEGORY PAGES ──────────────────────────────────────────────────
-function categoryCard(title: string, icon: string, description: string, url: string) {
-  const encoded = encodeURIComponent(url);
-  return `<button class="card" onclick="location.href='/view?url=${encoded}'"><div class="icon">${icon}</div><h3>${title}</h3><p>${description}</p></button>`;
+// ----------------------------- EMBEDS -----------------------------
+
+app.get("/embed/youtube", (c) => {
+  return c.html(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>YouTube — Lunar</title>${BASE_STYLE}</head><body>${CHROME}
+<div style="min-height:100vh;display:grid;place-items:center;padding:30px">
+<div class="card" style="width:min(720px,100%)">
+<h1>YouTube Player</h1>
+<p>Paste a YouTube URL or video ID.</p>
+<div class="search"><input id="yt" placeholder="https://youtube.com/watch?v=..."><button id="play" class="primary">Play</button></div>
+</div></div>
+<script>
+function getId(value){
+ const s=value.trim();
+ if(/^[A-Za-z0-9_-]{6,}$/.test(s))return s;
+ try{
+  const u=new URL(s);
+  if(u.hostname.includes("youtu.be"))return u.pathname.slice(1);
+  return u.searchParams.get("v")||(u.pathname.match(/(?:shorts|embed)\\/([^/]+)/)||[])[1]||"";
+ }catch{return "";}
 }
+function play(){
+ const id=getId(document.getElementById("yt").value);
+ if(id)location.href="/embed/youtube/watch?v="+encodeURIComponent(id);
+}
+document.getElementById("play").onclick=play;
+document.getElementById("yt").onkeydown=e=>{if(e.key==="Enter")play()};
+</script></body></html>`);
+});
+
+app.get("/embed/youtube/watch", (c) => {
+  const id = c.req.query("v") || "";
+
+  if (!/^[A-Za-z0-9_-]{6,}$/.test(id)) {
+    return c.redirect("/embed/youtube");
+  }
+
+  return c.html(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>YouTube — Lunar</title>${BASE_STYLE}</head><body>${CHROME}
+<div class="topbar"><button class="btn" onclick="location.href='/embed/youtube'">← Back</button><button class="btn" onclick="location.href='/'">Lunar</button></div>
+<div style="height:calc(100vh - 58px)"><iframe style="width:100%;height:100%;border:0" src="https://www.youtube.com/embed/${encodeURIComponent(id)}?autoplay=1" allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen></iframe></div>
+</body></html>`);
+});
+
+app.get("/embed/tiktok", (c) => {
+  const id = c.req.query("v") || "";
+
+  if (!/^\d+$/.test(id)) return c.redirect("/");
+
+  return c.html(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TikTok — Lunar</title>${BASE_STYLE}</head><body>${CHROME}
+<div class="topbar"><button class="btn" onclick="location.href='/'">← Lunar</button><b>TikTok</b></div>
+<div style="height:calc(100vh - 58px);display:grid;place-items:center"><iframe style="width:min(700px,100%);height:100%;border:0" src="https://www.tiktok.com/player/v1/${id}?controls=1&description=1&music_info=1&fullscreen_button=1" allow="fullscreen; autoplay" allowfullscreen></iframe></div>
+</body></html>`);
+});
+
+// ----------------------------- SHARED CHAT -----------------------------
+
+app.get("/api/chat", (c) => {
+  return c.json({
+    messages: chatMessages.slice(-100),
+  });
+});
+
+app.post("/api/chat", async (c) => {
+  try {
+    const body = await c.req.json();
+    const name =
+      typeof body?.name === "string" && body.name.trim()
+        ? body.name.trim().slice(0, 30)
+        : "Guest";
+    const text =
+      typeof body?.text === "string" ? body.text.trim().slice(0, 500) : "";
+
+    if (!text) return c.json({ error: "Message required" }, 400);
+
+    const message: ChatMessage = {
+      id: nextChatId++,
+      name,
+      text,
+      time: Date.now(),
+    };
+
+    chatMessages.push(message);
+
+    if (chatMessages.length > 100) {
+      chatMessages = chatMessages.slice(-100);
+    }
+
+    return c.json({ ok: true, message });
+  } catch {
+    return c.json({ error: "Invalid request" }, 400);
+  }
+});
+
+function chatPage() {
+  const content = `
+<div class="page">
+<h1>Shared Chat</h1>
+<p>Messages are stored on the Lunar server, so visitors using the same deployment can see them.</p>
+<div class="chatbox" id="messages"></div>
+<div class="chatrow">
+<input id="name" placeholder="Your name" maxlength="30">
+<input id="chatInput" placeholder="Type a message..." maxlength="500">
+<button id="send">Send</button>
+</div>
+<div class="status" id="chatStatus">Connecting…</div>
+</div>`;
+
+  const script = `<script>
+const messages=document.getElementById("messages");
+const nameInput=document.getElementById("name");
+const input=document.getElementById("chatInput");
+const send=document.getElementById("send");
+const status=document.getElementById("chatStatus");
+
+nameInput.value=localStorage.getItem("lunarName")||"";
+nameInput.addEventListener("input",()=>localStorage.setItem("lunarName",nameInput.value));
+
+let lastSignature="";
+
+function render(data){
+ const signature=JSON.stringify(data.messages||[]);
+ if(signature===lastSignature)return;
+ lastSignature=signature;
+ messages.innerHTML="";
+ for(const m of data.messages||[]){
+   const row=document.createElement("div");
+   row.className="msg";
+   const top=document.createElement("div");
+   const b=document.createElement("b");
+   b.textContent=m.name;
+   const small=document.createElement("small");
+   small.textContent=new Date(m.time).toLocaleTimeString();
+   top.append(b,small);
+   const text=document.createElement("div");
+   text.style.marginTop="6px";
+   text.textContent=m.text;
+   row.append(top,text);
+   messages.appendChild(row);
+ }
+ messages.scrollTop=messages.scrollHeight;
+}
+
+async function load(){
+ try{
+   const r=await fetch("/api/chat",{cache:"no-store"});
+   if(!r.ok)throw new Error("HTTP "+r.status);
+   render(await r.json());
+   status.textContent="Connected";
+ }catch(e){
+   status.textContent="Chat connection failed";
+ }
+}
+
+async function sendMessage(){
+ const text=input.value.trim();
+ if(!text)return;
+ send.disabled=true;
+ try{
+   const r=await fetch("/api/chat",{
+     method:"POST",
+     headers:{"Content-Type":"application/json"},
+     body:JSON.stringify({name:nameInput.value,text})
+   });
+   const data=await r.json();
+   if(!r.ok)throw new Error(data.error||"Failed");
+   input.value="";
+   await load();
+   input.focus();
+ }catch(e){
+   status.textContent=e.message||"Could not send";
+ }finally{
+   send.disabled=false;
+ }
+}
+
+send.onclick=sendMessage;
+input.addEventListener("keydown",e=>{
+ if(e.key==="Enter"){e.preventDefault();sendMessage();}
+});
+load();
+setInterval(load,1500);
+</script>`;
+
+  return layout("Chat", content, script);
+}
+
+// ----------------------------- AI -----------------------------
+
+app.get("/api/ai/status", (c) => {
+  return c.json({
+    configured: Boolean(OPENAI_API_KEY),
+    model: OPENAI_MODEL,
+  });
+});
+
+app.post("/api/ai", async (c) => {
+  if (!OPENAI_API_KEY) {
+    return c.json(
+      {
+        error:
+          "AI is not configured. Add OPENAI_API_KEY in Railway Variables, then redeploy.",
+      },
+      503
+    );
+  }
+
+  try {
+    const body = await c.req.json();
+
+    const input =
+      typeof body?.input === "string" ? body.input.trim().slice(0, 8000) : "";
+
+    if (!input) return c.json({ error: "Message required" }, 400);
+
+    const history = Array.isArray(body?.history)
+      ? body.history
+          .filter(
+            (m: any) =>
+              m &&
+              (m.role === "user" || m.role === "assistant") &&
+              typeof m.content === "string"
+          )
+          .slice(-12)
+          .map((m: any) => ({
+            role: m.role,
+            content: m.content.slice(0, 8000),
+          }))
+      : [];
+
+    history.push({
+      role: "user",
+      content: input,
+    });
+
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer " + OPENAI_API_KEY,
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        input: history,
+      }),
+    });
+
+    const data: any = await response.json();
+
+    if (!response.ok) {
+      console.error("[lunar] OpenAI error:", data);
+      return c.json(
+        {
+          error:
+            data?.error?.message ||
+            "The AI provider returned an error.",
+        },
+        response.status as any
+      );
+    }
+
+    let output = "";
+
+    if (typeof data.output_text === "string") {
+      output = data.output_text;
+    } else if (Array.isArray(data.output)) {
+      for (const item of data.output) {
+        if (item?.type === "message" && Array.isArray(item.content)) {
+          for (const part of item.content) {
+            if (part?.type === "output_text" && typeof part.text === "string") {
+              output += part.text;
+            }
+          }
+        }
+      }
+    }
+
+    if (!output) output = "The AI returned an empty response.";
+
+    return c.json({
+      ok: true,
+      text: output,
+      model: data.model || OPENAI_MODEL,
+    });
+  } catch (error) {
+    console.error("[lunar] AI error:", error);
+    return c.json({ error: "AI request failed." }, 502);
+  }
+});
+
+function aiPage() {
+  const content = `
+<div class="page">
+<h1>Lunar AI</h1>
+<p>A real AI chat connected to your server-side API key.</p>
+<div class="ai-panel">
+<div class="ai-messages" id="aiMessages"></div>
+<div class="status" id="aiStatus">Checking AI connection…</div>
+<div class="ai-row">
+<textarea class="ai-input" id="aiInput" rows="2" placeholder="Ask Lunar AI something..."></textarea>
+<button class="ai-send" id="aiSend">Send</button>
+</div>
+</div>
+</div>`;
+
+  const script = `<script>
+const box=document.getElementById("aiMessages");
+const input=document.getElementById("aiInput");
+const send=document.getElementById("aiSend");
+const status=document.getElementById("aiStatus");
+
+let history=[];
+
+function add(role,text){
+ const d=document.createElement("div");
+ d.className="ai-msg "+(role==="user"?"ai-user":"ai-assistant");
+ d.textContent=text;
+ box.appendChild(d);
+ box.scrollTop=box.scrollHeight;
+}
+
+async function check(){
+ try{
+   const r=await fetch("/api/ai/status");
+   const d=await r.json();
+   status.textContent=d.configured?"AI ready • "+d.model:"AI needs an API key in Railway";
+ }catch{
+   status.textContent="Could not check AI status";
+ }
+}
+
+async function sendMessage(){
+ const text=input.value.trim();
+ if(!text)return;
+
+ add("user",text);
+ history.push({role:"user",content:text});
+ input.value="";
+ send.disabled=true;
+ status.textContent="Thinking…";
+
+ try{
+   const r=await fetch("/api/ai",{
+     method:"POST",
+     headers:{"Content-Type":"application/json"},
+     body:JSON.stringify({input:text,history})
+   });
+
+   const d=await r.json();
+   if(!r.ok)throw new Error(d.error||"AI request failed");
+
+   add("assistant",d.text);
+   history.push({role:"assistant",content:d.text});
+   status.textContent="Ready";
+ }catch(e){
+   add("assistant","Error: "+(e.message||"AI request failed"));
+   history.pop();
+   status.textContent="AI request failed";
+ }finally{
+   send.disabled=false;
+   input.focus();
+ }
+}
+
+send.onclick=sendMessage;
+input.addEventListener("keydown",e=>{
+ if(e.key==="Enter"&&!e.shiftKey){
+   e.preventDefault();
+   sendMessage();
+ }
+});
+check();
+input.focus();
+</script>`;
+
+  return layout("AI", content, script);
+}
+
+// ----------------------------- OTHER PAGES -----------------------------
 
 app.get("/page/:page", (c) => {
   const page = c.req.param("page");
-  const content: Record<string, string> = {
-    games: `<h1>Games Hub</h1><p>Open a game site through Lunar.</p><div class="grid">${categoryCard("Chess.com", "♟️", "Play chess online", "https://www.chess.com")}${categoryCard("Miniclip", "🎯", "Casual games", "https://www.miniclip.com")}${categoryCard("Cool Math Games", "🧮", "Puzzle and math games", "https://www.coolmathgames.com")}</div>`,
-    media: `<h1>Media</h1><p>Open media services or the built-in YouTube player.</p><div class="grid"><button class="card" onclick="location.href='/embed/youtube'"><div class="icon">▶️</div><h3>YouTube</h3><p>Use the official embedded player</p></button>${categoryCard("Spotify", "🎵", "Open Spotify", "https://open.spotify.com")}${categoryCard("Netflix", "🎬", "Open Netflix", "https://www.netflix.com")}</div>`,
-    chat: `<h1>Chat</h1><p>This is a local browser-only chat demo.</p><div id="messages" class="chatbox"></div><div class="chatrow"><input id="chat" placeholder="Type a message..."><button id="send">Send</button></div>`,
-    emulator: `<h1>Emulator</h1><p>Open an online emulator site.</p><div class="grid">${categoryCard("Emulator Online", "🎮", "Online emulator site", "https://www.emulatoronline.com")}${categoryCard("Retro Games", "👾", "Classic games", "https://www.retrogames.cz")}</div>`,
-    ai: `<h1>AI</h1><p>Open an AI service.</p><div class="grid">${categoryCard("ChatGPT", "✦", "Open ChatGPT", "https://chatgpt.com")}${categoryCard("Claude", "◈", "Open Claude", "https://claude.ai")}</div>`,
-  };
 
-  const body = content[page] || `<h1>Page not found</h1><p>That Lunar page does not exist.</p>`;
-  return c.html(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lunar</title><style>*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:#000;color:#fff;font-family:system-ui}.shell{min-height:100vh;display:flex}.side{width:190px;background:#0a0a0a;border-right:1px solid #222;padding:16px;flex:none}.brand{font-weight:700;font-size:20px;margin:6px 8px 20px}.nav{display:block;width:100%;padding:10px;border:0;border-radius:8px;background:transparent;color:#aaa;text-align:left;cursor:pointer;margin:3px 0}.nav:hover{background:#171717;color:#fff}.main{flex:1;padding:48px;max-width:1100px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-top:28px}.card{background:#111;color:#fff;border:1px solid #222;border-radius:14px;padding:24px;cursor:pointer;text-align:center}.card:hover{border-color:#555;transform:translateY(-2px)}.card .icon{font-size:42px}.card h3{margin:12px 0 6px}.card p,p{color:#888}.chatbox{height:400px;background:#0d0d0d;border:1px solid #222;border-radius:12px;padding:16px;overflow:auto}.chatrow{display:flex;gap:8px;margin-top:12px}.chatrow input{flex:1;background:#111;color:#fff;border:1px solid #333;border-radius:8px;padding:12px}.chatrow button{padding:0 18px;border:0;border-radius:8px;cursor:pointer}</style></head><body><div class="shell"><aside class="side"><div class="brand">Lunar</div><button class="nav" onclick="location.href='/'">Home</button><button class="nav" onclick="location.href='/page/games'">Games</button><button class="nav" onclick="location.href='/page/media'">Media</button><button class="nav" onclick="location.href='/page/chat'">Chat</button><button class="nav" onclick="location.href='/page/emulator'">Emulator</button><button class="nav" onclick="location.href='/page/ai'">AI</button></aside><main class="main">${body}</main></div><script>const send=document.getElementById('send');const chat=document.getElementById('chat');const messages=document.getElementById('messages');function add(){if(!chat||!messages)return;const v=chat.value.trim();if(!v)return;const d=document.createElement('div');d.textContent=v;d.style.cssText='padding:10px;margin-bottom:8px;background:#111;border-radius:8px';messages.appendChild(d);chat.value='';chat.focus()}if(send)send.onclick=add;if(chat)chat.addEventListener('keydown',e=>{if(e.key==='Enter')add()});</script></body></html>`);
-});
+  if (page === "chat") return c.html(chatPage());
+  if (page === "ai") return c.html(aiPage());
 
-// ─── HOME ────────────────────────────────────────────────────────────
-app.get("/", (c) => c.html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lunar Proxy</title><style>*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;background:#000;color:#fff;font-family:system-ui}body{overflow:hidden}.shell{height:100%;display:flex}.side{width:190px;background:#0a0a0a;border-right:1px solid #222;padding:16px;flex:none}.brand{font-size:20px;font-weight:700;margin:6px 8px 20px}.nav{display:block;width:100%;padding:10px;border:0;border-radius:8px;background:transparent;color:#aaa;text-align:left;cursor:pointer;margin:3px 0}.nav:hover{background:#171717;color:#fff}.main{position:relative;flex:1;overflow:auto}.center{min-height:100%;display:flex;align-items:center;justify-content:center;padding:40px}.box{width:min(760px,100%);text-align:center}.logo{font-size:64px;margin-bottom:8px}.subtitle{color:#777;margin-top:0}.search{display:flex;gap:8px;margin:30px auto 18px}.search input{flex:1;min-width:0;background:#111;color:#fff;border:1px solid #333;border-radius:10px;padding:15px;outline:none;font-size:16px}.search button{background:#fff;color:#000;border:0;border-radius:10px;padding:0 22px;font-weight:600;cursor:pointer}.engines{display:flex;justify-content:center;gap:8px;flex-wrap:wrap}.engine{background:#111;color:#aaa;border:1px solid #222;border-radius:9px;padding:9px 13px;cursor:pointer}.engine.active,.engine:hover{color:#fff;border-color:#555}.shortcuts{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:24px}.shortcut{background:#0d0d0d;border:1px solid #222;border-radius:10px;padding:12px 16px;cursor:pointer;color:#ddd}.shortcut:hover{border-color:#555}.note{font-size:12px;color:#555;margin-top:30px}@media(max-width:700px){.side{width:120px}.search{flex-direction:column}.search button{height:44px}}</style></head><body><div class="shell"><aside class="side"><div class="brand">Lunar</div><button class="nav" onclick="location.href='/'">Home</button><button class="nav" onclick="location.href='/page/games'">Games</button><button class="nav" onclick="location.href='/page/media'">Media</button><button class="nav" onclick="location.href='/page/chat'">Chat</button><button class="nav" onclick="location.href='/page/emulator'">Emulator</button><button class="nav" onclick="location.href='/page/ai'">AI</button></aside><main class="main"><div class="center"><div class="box"><div class="logo">☾</div><h1>Lunar Proxy</h1><p class="subtitle">Search or enter a website address.</p><div class="search"><input id="searchInput" placeholder="Search or enter URL..." autocomplete="off" spellcheck="false"><button id="searchButton" type="button">Search</button></div><div class="engines"><button class="engine active" data-engine="duckduckgo">DuckDuckGo</button><button class="engine" data-engine="bing">Bing</button><button class="engine" data-engine="google">Google</button></div><div class="shortcuts"><button class="shortcut" data-url="https://www.youtube.com">YouTube</button><button class="shortcut" data-url="https://www.tiktok.com">TikTok</button><button class="shortcut" data-url="https://www.reddit.com">Reddit</button><button class="shortcut" data-url="https://www.instagram.com">Instagram</button></div><div class="note">Lunar uses a simple server-side web proxy. Some sites may block proxy access.</div></div></div></main></div><script>
-(function(){
-  let engine='duckduckgo';
-  const input=document.getElementById('searchInput');
-  const button=document.getElementById('searchButton');
-  function isUrl(v){return /^https?:\/\//i.test(v)||(!v.includes(' ')&&v.includes('.')&&v.length>3)}
-  function doSearch(){
-    const value=input.value.trim();
-    if(!value){input.focus();return;}
-    let destination;
-    if(isUrl(value)) destination=/^https?:\/\//i.test(value)?value:'https://'+value;
-    else destination=(engine==='duckduckgo'?'https://html.duckduckgo.com/html/?q=':engine==='bing'?'https://www.bing.com/search?q=':'https://www.google.com/search?q=')+encodeURIComponent(value);
-    window.location.assign('/view?url='+encodeURIComponent(destination));
+  let content = "";
+
+  if (page === "games") {
+    content = `
+<div class="page">
+<h1>Games</h1>
+<p>Game sites that can be opened through Lunar.</p>
+<div class="grid">
+${categoryCard("Chess.com","♟️","Play chess online","https://www.chess.com")}
+${categoryCard("Miniclip","🎯","Casual games","https://www.miniclip.com")}
+${categoryCard("Cool Math Games","🧮","Puzzle games","https://www.coolmathgames.com")}
+${categoryCard("Pogo","🃏","Card and board games","https://www.pogo.com")}
+</div></div>`;
+  } else if (page === "media") {
+    content = `
+<div class="page">
+<h1>Media</h1>
+<p>Media services and built-in players.</p>
+<div class="grid">
+<button class="card" onclick="location.href='/embed/youtube'"><div class="icon">▶️</div><h3>YouTube Player</h3><p>Official embedded player</p></button>
+${categoryCard("Spotify","🎵","Open Spotify","https://open.spotify.com")}
+${categoryCard("Reddit","💬","Open Reddit","https://www.reddit.com")}
+</div></div>`;
+  } else if (page === "emulator") {
+    content = `
+<div class="page">
+<h1>Emulator</h1>
+<p>Online emulator resources.</p>
+<div class="grid">
+${categoryCard("Emulator Online","🎮","Online emulator site","https://www.emulatoronline.com")}
+${categoryCard("Retro Games","👾","Classic games","https://www.retrogames.cz")}
+</div></div>`;
+  } else {
+    content = `
+<div class="page">
+<h1>Page not found</h1>
+<p>That Lunar page does not exist.</p>
+<button class="primary" onclick="location.href='/'">Return Home</button>
+</div>`;
   }
-  button.addEventListener('click',doSearch);
-  input.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();doSearch()}});
-  document.querySelectorAll('.engine').forEach(function(el){el.addEventListener('click',function(){engine=el.dataset.engine||'duckduckgo';document.querySelectorAll('.engine').forEach(x=>x.classList.remove('active'));el.classList.add('active');input.focus()})});
-  document.querySelectorAll('.shortcut').forEach(function(el){el.addEventListener('click',function(){window.location.assign('/view?url='+encodeURIComponent(el.dataset.url||''))})});
-})();
-</script></body></html>`));
+
+  return c.html(layout(page, content));
+});
 
 export default app;
