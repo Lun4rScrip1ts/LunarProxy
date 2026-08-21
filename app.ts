@@ -6,8 +6,8 @@ const USER_AGENT =
   process.env.USER_AGENT ||
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/146.0.0.0 Safari/537.36";
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
-const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.6-luna";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.7-flash";
 
 type ChatMessage = {
   id: number;
@@ -64,7 +64,10 @@ function proxyUrl(value: string, base: string) {
   }
 
   const absolute = absoluteUrl(value, base);
-  if (!/^https?:\/\//i.test(absolute)) return value;
+
+  if (!/^https?:\/\//i.test(absolute)) {
+    return value;
+  }
 
   return "/proxy?url=" + encodeURIComponent(absolute);
 }
@@ -79,9 +82,23 @@ function rewriteHtml(html: string, base: string) {
     );
   }
 
-  out = out.replace(
-    /\b(?:href|src|poster|action|data-src|data-original|data-lazy-src)\s*=\s*(["'])(.*?)\1/gi,
-    (match, quote, value) => {
+  const attributes = [
+    "href",
+    "src",
+    "poster",
+    "action",
+    "data-src",
+    "data-original",
+    "data-lazy-src",
+  ];
+
+  for (const attr of attributes) {
+    const regex = new RegExp(
+      `\\b${attr}\\s*=\\s*(["'])(.*?)\\1`,
+      "gi"
+    );
+
+    out = out.replace(regex, (match, quote, value) => {
       if (
         /^(?:#|javascript:|mailto:|tel:|data:|blob:|about:|chrome:)/i.test(
           value
@@ -89,9 +106,10 @@ function rewriteHtml(html: string, base: string) {
       ) {
         return match;
       }
-      return match.replace(value, proxyUrl(value, base));
-    }
-  );
+
+      return `${attr}=${quote}${proxyUrl(value, base)}${quote}`;
+    });
+  }
 
   out = out.replace(
     /\bsrcset\s*=\s*(["'])(.*?)\1/gi,
@@ -100,8 +118,11 @@ function rewriteHtml(html: string, base: string) {
         .split(",")
         .map((item: string) => {
           const parts = item.trim().split(/\s+/);
+
           if (!parts[0]) return item;
+
           parts[0] = proxyUrl(parts[0], base);
+
           return parts.join(" ");
         })
         .join(", ");
@@ -113,15 +134,12 @@ function rewriteHtml(html: string, base: string) {
   out = out.replace(
     /url\(\s*(["']?)([^"')\s]+)\1\s*\)/gi,
     (match, quote, value) => {
-      if (/^(?:data:|blob:|about:)/i.test(value)) return match;
+      if (/^(?:data:|blob:|about:)/i.test(value)) {
+        return match;
+      }
+
       return `url("${proxyUrl(value, base)}")`;
     }
-  );
-
-  out = out.replace(
-    /<script([^>]*)\ssrc\s*=\s*(["'])(.*?)\2([^>]*)>/gi,
-    (match, before, quote, value, after) =>
-      `<script${before} src=${quote}${proxyUrl(value, base)}${quote}${after}>`
   );
 
   return out;
@@ -297,7 +315,7 @@ app.get("/", (c) => {
   </div>
 
   <div class="shortcuts" style="margin-top:20px">
-    <button class="shortcut" data-url="https://www.youtube.com">▶ YouTube</button>
+    <button class="shortcut" data-url="https://www.youtube.com">YouTube</button>
     <button class="shortcut" data-url="https://www.tiktok.com">TikTok</button>
     <button class="shortcut" data-url="https://www.reddit.com">Reddit</button>
     <button class="shortcut" data-url="https://www.instagram.com">Instagram</button>
@@ -860,17 +878,18 @@ setInterval(load,1500);
 
 app.get("/api/ai/status", (c) => {
   return c.json({
-    configured: Boolean(OPENAI_API_KEY),
-    model: OPENAI_MODEL,
+    configured: Boolean(GEMINI_API_KEY),
+    model: GEMINI_MODEL,
+    provider: "Google Gemini",
   });
 });
 
 app.post("/api/ai", async (c) => {
-  if (!OPENAI_API_KEY) {
+  if (!GEMINI_API_KEY) {
     return c.json(
       {
         error:
-          "AI is not configured. Add OPENAI_API_KEY in Railway Variables, then redeploy.",
+          "Gemini is not configured. Add GEMINI_API_KEY to Railway Variables and redeploy.",
       },
       503
     );
@@ -880,9 +899,13 @@ app.post("/api/ai", async (c) => {
     const body = await c.req.json();
 
     const input =
-      typeof body?.input === "string" ? body.input.trim().slice(0, 8000) : "";
+      typeof body?.input === "string"
+        ? body.input.trim().slice(0, 8000)
+        : "";
 
-    if (!input) return c.json({ error: "Message required" }, 400);
+    if (!input) {
+      return c.json({ error: "Message required" }, 400);
+    }
 
     const history = Array.isArray(body?.history)
       ? body.history
@@ -894,37 +917,54 @@ app.post("/api/ai", async (c) => {
           )
           .slice(-12)
           .map((m: any) => ({
-            role: m.role,
-            content: m.content.slice(0, 8000),
+            role: m.role === "assistant" ? "model" : "user",
+            parts: [
+              {
+                text: m.content.slice(0, 8000),
+              },
+            ],
           }))
       : [];
 
     history.push({
       role: "user",
-      content: input,
+      parts: [
+        {
+          text: input,
+        },
+      ],
     });
 
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: "Bearer " + OPENAI_API_KEY,
-      },
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        input: history,
-      }),
-    });
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+        GEMINI_MODEL
+      )}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": GEMINI_API_KEY,
+        },
+        body: JSON.stringify({
+          contents: history,
+          generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 2048,
+          },
+        }),
+      }
+    );
 
     const data: any = await response.json();
 
     if (!response.ok) {
-      console.error("[lunar] OpenAI error:", data);
+      console.error("[lunar] Gemini error:", data);
+
       return c.json(
         {
           error:
             data?.error?.message ||
-            "The AI provider returned an error.",
+            "Gemini returned an error.",
         },
         response.status as any
       );
@@ -932,13 +972,17 @@ app.post("/api/ai", async (c) => {
 
     let output = "";
 
-    if (typeof data.output_text === "string") {
-      output = data.output_text;
-    } else if (Array.isArray(data.output)) {
-      for (const item of data.output) {
-        if (item?.type === "message" && Array.isArray(item.content)) {
-          for (const part of item.content) {
-            if (part?.type === "output_text" && typeof part.text === "string") {
+    const candidates = data?.candidates;
+
+    if (Array.isArray(candidates)) {
+      for (const candidate of candidates) {
+        const parts = candidate?.content?.parts;
+
+        if (Array.isArray(parts)) {
+          for (const part of parts) {
+            if (
+              typeof part?.text === "string"
+            ) {
               output += part.text;
             }
           }
@@ -946,107 +990,27 @@ app.post("/api/ai", async (c) => {
       }
     }
 
-    if (!output) output = "The AI returned an empty response.";
+    if (!output) {
+      output = "Gemini returned an empty response.";
+    }
 
     return c.json({
       ok: true,
       text: output,
-      model: data.model || OPENAI_MODEL,
+      model: GEMINI_MODEL,
+      provider: "Google Gemini",
     });
   } catch (error) {
-    console.error("[lunar] AI error:", error);
-    return c.json({ error: "AI request failed." }, 502);
+    console.error("[lunar] Gemini error:", error);
+
+    return c.json(
+      {
+        error: "Gemini request failed.",
+      },
+      502
+    );
   }
 });
-
-function aiPage() {
-  const content = `
-<div class="page">
-<h1>Lunar AI</h1>
-<p>A real AI chat connected to your server-side API key.</p>
-<div class="ai-panel">
-<div class="ai-messages" id="aiMessages"></div>
-<div class="status" id="aiStatus">Checking AI connection…</div>
-<div class="ai-row">
-<textarea class="ai-input" id="aiInput" rows="2" placeholder="Ask Lunar AI something..."></textarea>
-<button class="ai-send" id="aiSend">Send</button>
-</div>
-</div>
-</div>`;
-
-  const script = `<script>
-const box=document.getElementById("aiMessages");
-const input=document.getElementById("aiInput");
-const send=document.getElementById("aiSend");
-const status=document.getElementById("aiStatus");
-
-let history=[];
-
-function add(role,text){
- const d=document.createElement("div");
- d.className="ai-msg "+(role==="user"?"ai-user":"ai-assistant");
- d.textContent=text;
- box.appendChild(d);
- box.scrollTop=box.scrollHeight;
-}
-
-async function check(){
- try{
-   const r=await fetch("/api/ai/status");
-   const d=await r.json();
-   status.textContent=d.configured?"AI ready • "+d.model:"AI needs an API key in Railway";
- }catch{
-   status.textContent="Could not check AI status";
- }
-}
-
-async function sendMessage(){
- const text=input.value.trim();
- if(!text)return;
-
- add("user",text);
- history.push({role:"user",content:text});
- input.value="";
- send.disabled=true;
- status.textContent="Thinking…";
-
- try{
-   const r=await fetch("/api/ai",{
-     method:"POST",
-     headers:{"Content-Type":"application/json"},
-     body:JSON.stringify({input:text,history})
-   });
-
-   const d=await r.json();
-   if(!r.ok)throw new Error(d.error||"AI request failed");
-
-   add("assistant",d.text);
-   history.push({role:"assistant",content:d.text});
-   status.textContent="Ready";
- }catch(e){
-   add("assistant","Error: "+(e.message||"AI request failed"));
-   history.pop();
-   status.textContent="AI request failed";
- }finally{
-   send.disabled=false;
-   input.focus();
- }
-}
-
-send.onclick=sendMessage;
-input.addEventListener("keydown",e=>{
- if(e.key==="Enter"&&!e.shiftKey){
-   e.preventDefault();
-   sendMessage();
- }
-});
-check();
-input.focus();
-</script>`;
-
-  return layout("AI", content, script);
-}
-
 // ----------------------------- OTHER PAGES -----------------------------
 
 app.get("/page/:page", (c) => {
