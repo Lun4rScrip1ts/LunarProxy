@@ -874,143 +874,194 @@ setInterval(load,1500);
   return layout("Chat", content, script);
 }
 
-// ----------------------------- AI -----------------------------
+// ----------------------------- AI PAGE -----------------------------
 
-app.get("/api/ai/status", (c) => {
-  return c.json({
-    configured: Boolean(GEMINI_API_KEY),
-    model: GEMINI_MODEL,
-    provider: "Google Gemini",
-  });
-});
+function aiPage() {
+  const content = `
+<div class="page">
+  <h1>✦ Lunar AI</h1>
+  <p>Chat with Lunar AI powered by Google Gemini.</p>
 
-app.post("/api/ai", async (c) => {
-  if (!GEMINI_API_KEY) {
-    return c.json(
-      {
-        error:
-          "Gemini is not configured. Add GEMINI_API_KEY to Railway Variables and redeploy.",
-      },
-      503
-    );
+  <div class="ai-panel">
+    <div class="ai-messages" id="aiMessages">
+      <div class="ai-msg ai-assistant">
+        <b>Lunar AI</b><br>
+        Hey! I'm Lunar AI. What would you like to ask?
+      </div>
+    </div>
+
+    <div class="status" id="aiStatus">Checking Gemini connection…</div>
+
+    <div class="ai-row">
+      <input
+        class="ai-input"
+        id="aiInput"
+        maxlength="8000"
+        placeholder="Ask Lunar AI anything..."
+        autocomplete="off"
+        spellcheck="false"
+      >
+      <button class="ai-send" id="aiSend">Send</button>
+    </div>
+  </div>
+</div>`;
+
+  const script = `<script>
+(function(){
+
+  const messages = document.getElementById("aiMessages");
+  const input = document.getElementById("aiInput");
+  const send = document.getElementById("aiSend");
+  const status = document.getElementById("aiStatus");
+
+  let history = [];
+
+  function addMessage(role, text) {
+    const div = document.createElement("div");
+
+    div.className =
+      "ai-msg " +
+      (role === "user" ? "ai-user" : "ai-assistant");
+
+    const label = document.createElement("b");
+    label.textContent =
+      role === "user" ? "You" : "Lunar AI";
+
+    const body = document.createElement("div");
+    body.style.marginTop = "6px";
+    body.textContent = text;
+
+    div.append(label, body);
+    messages.appendChild(div);
+
+    messages.scrollTop = messages.scrollHeight;
+
+    return div;
   }
 
-  try {
-    const body = await c.req.json();
+  async function checkStatus() {
+    try {
+      const response = await fetch("/api/ai/status", {
+        cache: "no-store"
+      });
 
-    const input =
-      typeof body?.input === "string"
-        ? body.input.trim().slice(0, 8000)
-        : "";
+      const data = await response.json();
 
-    if (!input) {
-      return c.json({ error: "Message required" }, 400);
+      if (data.configured) {
+        status.textContent =
+          "Connected • " + (data.model || "Gemini");
+      } else {
+        status.textContent =
+          "Gemini is not configured. Add GEMINI_API_KEY in Railway Variables.";
+      }
+
+    } catch {
+      status.textContent = "Unable to check AI status.";
     }
+  }
 
-    const history = Array.isArray(body?.history)
-      ? body.history
-          .filter(
-            (m: any) =>
-              m &&
-              (m.role === "user" || m.role === "assistant") &&
-              typeof m.content === "string"
-          )
-          .slice(-12)
-          .map((m: any) => ({
-            role: m.role === "assistant" ? "model" : "user",
-            parts: [
-              {
-                text: m.content.slice(0, 8000),
-              },
-            ],
-          }))
-      : [];
+  async function sendMessage() {
 
-    history.push({
-      role: "user",
-      parts: [
-        {
-          text: input,
-        },
-      ],
-    });
+    const text = input.value.trim();
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-        GEMINI_MODEL
-      )}:generateContent`,
-      {
+    if (!text || send.disabled) return;
+
+    addMessage("user", text);
+
+    input.value = "";
+    input.disabled = true;
+    send.disabled = true;
+
+    status.textContent = "Lunar AI is thinking…";
+
+    try {
+
+      const response = await fetch("/api/ai", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": GEMINI_API_KEY,
+          "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          contents: history,
-          generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 2048,
-          },
-        }),
+          input: text,
+          history: history
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.error || "AI request failed."
+        );
       }
-    );
 
-    const data: any = await response.json();
+      const answer =
+        typeof data.text === "string"
+          ? data.text
+          : "Gemini returned an empty response.";
 
-    if (!response.ok) {
-      console.error("[lunar] Gemini error:", data);
+      addMessage("assistant", answer);
 
-      return c.json(
-        {
-          error:
-            data?.error?.message ||
-            "Gemini returned an error.",
-        },
-        response.status as any
+      history.push({
+        role: "user",
+        content: text
+      });
+
+      history.push({
+        role: "assistant",
+        content: answer
+      });
+
+      if (history.length > 12) {
+        history = history.slice(-12);
+      }
+
+      status.textContent =
+        "Connected • " + (data.model || "Gemini");
+
+    } catch (error) {
+
+      const message =
+        error instanceof Error
+          ? error.message
+          : "AI request failed.";
+
+      addMessage(
+        "assistant",
+        "Sorry, I couldn't get a response from Gemini.\\n\\n" +
+        message
       );
+
+      status.textContent = "AI request failed.";
+
+    } finally {
+
+      input.disabled = false;
+      send.disabled = false;
+      input.focus();
+
     }
-
-    let output = "";
-
-    const candidates = data?.candidates;
-
-    if (Array.isArray(candidates)) {
-      for (const candidate of candidates) {
-        const parts = candidate?.content?.parts;
-
-        if (Array.isArray(parts)) {
-          for (const part of parts) {
-            if (
-              typeof part?.text === "string"
-            ) {
-              output += part.text;
-            }
-          }
-        }
-      }
-    }
-
-    if (!output) {
-      output = "Gemini returned an empty response.";
-    }
-
-    return c.json({
-      ok: true,
-      text: output,
-      model: GEMINI_MODEL,
-      provider: "Google Gemini",
-    });
-  } catch (error) {
-    console.error("[lunar] Gemini error:", error);
-
-    return c.json(
-      {
-        error: "Gemini request failed.",
-      },
-      502
-    );
   }
-});
+
+  send.addEventListener("click", sendMessage);
+
+  input.addEventListener("keydown", function(e) {
+
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+
+  });
+
+  checkStatus();
+  input.focus();
+
+})();
+</script>`;
+
+  return layout("AI", content, script);
+}
 // ----------------------------- OTHER PAGES -----------------------------
 
 app.get("/page/:page", (c) => {
