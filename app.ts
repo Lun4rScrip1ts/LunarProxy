@@ -875,193 +875,229 @@ setInterval(load,1500);
 }
 
 // ----------------------------- AI PAGE -----------------------------
-
-function aiPage() {
-  const content = `
-<div class="page">
-  <h1>✦ Lunar AI</h1>
-  <p>Chat with Lunar AI powered by Google Gemini.</p>
-
-  <div class="ai-panel">
-    <div class="ai-messages" id="aiMessages">
-      <div class="ai-msg ai-assistant">
-        <b>Lunar AI</b><br>
-        Hey! I'm Lunar AI. What would you like to ask?
-      </div>
-    </div>
-
-    <div class="status" id="aiStatus">Checking Gemini connection…</div>
-
-    <div class="ai-row">
-      <input
-        class="ai-input"
-        id="aiInput"
-        maxlength="8000"
-        placeholder="Ask Lunar AI anything..."
-        autocomplete="off"
-        spellcheck="false"
-      >
-      <button class="ai-send" id="aiSend">Send</button>
-    </div>
-  </div>
-</div>`;
-
-  const script = `<script>
-(function(){
-
-  const messages = document.getElementById("aiMessages");
-  const input = document.getElementById("aiInput");
-  const send = document.getElementById("aiSend");
-  const status = document.getElementById("aiStatus");
-
-  let history = [];
-
-  function addMessage(role, text) {
-    const div = document.createElement("div");
-
-    div.className =
-      "ai-msg " +
-      (role === "user" ? "ai-user" : "ai-assistant");
-
-    const label = document.createElement("b");
-    label.textContent =
-      role === "user" ? "You" : "Lunar AI";
-
-    const body = document.createElement("div");
-    body.style.marginTop = "6px";
-    body.textContent = text;
-
-    div.append(label, body);
-    messages.appendChild(div);
-
-    messages.scrollTop = messages.scrollHeight;
-
-    return div;
+app.post("/api/ai", async (c) => {
+  if (!GEMINI_API_KEY) {
+    return c.json(
+      {
+        error:
+          "Gemini is not configured. Add GEMINI_API_KEY to Railway Variables and redeploy.",
+      },
+      503
+    );
   }
 
-  async function checkStatus() {
-    try {
-      const response = await fetch("/api/ai/status", {
-        cache: "no-store"
-      });
+  try {
+    const body = await c.req.json();
 
-      const data = await response.json();
+    const input =
+      typeof body?.input === "string"
+        ? body.input.trim().slice(0, 8000)
+        : "";
 
-      if (data.configured) {
-        status.textContent =
-          "Connected • " + (data.model || "Gemini");
-      } else {
-        status.textContent =
-          "Gemini is not configured. Add GEMINI_API_KEY in Railway Variables.";
-      }
-
-    } catch {
-      status.textContent = "Unable to check AI status.";
-    }
-  }
-
-  async function sendMessage() {
-
-    const text = input.value.trim();
-
-    if (!text || send.disabled) return;
-
-    addMessage("user", text);
-
-    input.value = "";
-    input.disabled = true;
-    send.disabled = true;
-
-    status.textContent = "Lunar AI is thinking…";
-
-    try {
-
-      const response = await fetch("/api/ai", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
+    if (!input) {
+      return c.json(
+        {
+          error: "Message required",
         },
-        body: JSON.stringify({
-          input: text,
-          history: history
-        })
-      });
+        400
+      );
+    }
 
-      const data = await response.json();
+    const history = Array.isArray(body?.history)
+      ? body.history
+          .filter(
+            (m: any) =>
+              m &&
+              (m.role === "user" || m.role === "assistant") &&
+              typeof m.content === "string"
+          )
+          .slice(-12)
+          .map((m: any) => ({
+            role: m.role === "assistant" ? "model" : "user",
+            parts: [
+              {
+                text: m.content.slice(0, 8000),
+              },
+            ],
+          }))
+      : [];
 
-      if (!response.ok) {
-        throw new Error(
-          data.error || "AI request failed."
-        );
-      }
+    history.push({
+      role: "user",
+      parts: [
+        {
+          text: input,
+        },
+      ],
+    });
 
-      const answer =
-        typeof data.text === "string"
-          ? data.text
-          : "Gemini returned an empty response.";
+    const endpoint =
+      `https://generativelanguage.googleapis.com/v1beta/models/` +
+      `${encodeURIComponent(GEMINI_MODEL)}:generateContent`;
 
-      addMessage("assistant", answer);
+    console.log(
+      "[lunar] Sending Gemini request:",
+      GEMINI_MODEL
+    );
 
-      history.push({
-        role: "user",
-        content: text
-      });
+    const response = await fetch(endpoint, {
+      method: "POST",
 
-      history.push({
-        role: "assistant",
-        content: answer
-      });
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": GEMINI_API_KEY,
+      },
 
-      if (history.length > 12) {
-        history = history.slice(-12);
-      }
+      body: JSON.stringify({
+        contents: history,
 
-      status.textContent =
-        "Connected • " + (data.model || "Gemini");
+        generationConfig: {
+          maxOutputTokens: 2048,
+        },
+      }),
+    });
 
-    } catch (error) {
+    /*
+     * IMPORTANT:
+     * Don't call response.json() directly.
+     *
+     * Read the response as text first so we can safely handle
+     * unexpected upstream responses.
+     */
+    const rawText = await response.text();
 
-      const message =
-        error instanceof Error
-          ? error.message
-          : "AI request failed.";
+    console.log(
+      "[lunar] Gemini HTTP status:",
+      response.status
+    );
 
-      addMessage(
-        "assistant",
-        "Sorry, I couldn't get a response from Gemini.\\n\\n" +
-        message
+    console.log(
+      "[lunar] Gemini content-type:",
+      response.headers.get("content-type") || "unknown"
+    );
+
+    if (!response.ok) {
+      console.error(
+        "[lunar] Gemini upstream error:",
+        rawText.slice(0, 4000)
       );
 
-      status.textContent = "AI request failed.";
+      let errorMessage = "Gemini returned an error.";
 
-    } finally {
+      try {
+        const errorData = JSON.parse(rawText);
 
-      input.disabled = false;
-      send.disabled = false;
-      input.focus();
+        errorMessage =
+          errorData?.error?.message ||
+          errorMessage;
 
+      } catch {
+        if (rawText.trim()) {
+          errorMessage = rawText.slice(0, 1000);
+        }
+      }
+
+      return c.json(
+        {
+          error: errorMessage,
+          status: response.status,
+          model: GEMINI_MODEL,
+        },
+        502
+      );
     }
+
+    /*
+     * Parse the successful response safely.
+     */
+    let data: any;
+
+    try {
+      data = JSON.parse(rawText);
+    } catch (parseError) {
+      console.error(
+        "[lunar] Gemini returned invalid JSON:",
+        rawText.slice(0, 4000)
+      );
+
+      return c.json(
+        {
+          error:
+            "Gemini returned an invalid response. Check the Railway logs for the upstream response.",
+          details:
+            parseError instanceof Error
+              ? parseError.message
+              : "JSON parsing failed.",
+        },
+        502
+      );
+    }
+
+    /*
+     * Extract Gemini text.
+     */
+    let output = "";
+
+    const candidates = data?.candidates;
+
+    if (Array.isArray(candidates)) {
+      for (const candidate of candidates) {
+        const parts = candidate?.content?.parts;
+
+        if (!Array.isArray(parts)) continue;
+
+        for (const part of parts) {
+          if (typeof part?.text === "string") {
+            output += part.text;
+          }
+        }
+      }
+    }
+
+    /*
+     * Handle Gemini responses that contain no text.
+     */
+    if (!output.trim()) {
+      console.error(
+        "[lunar] Gemini returned no text:",
+        JSON.stringify(data).slice(0, 4000)
+      );
+
+      return c.json(
+        {
+          error:
+            "Gemini returned no text. The model may have blocked or otherwise declined the response.",
+          model: GEMINI_MODEL,
+        },
+        502
+      );
+    }
+
+    return c.json({
+      ok: true,
+      text: output.trim(),
+      model: GEMINI_MODEL,
+      provider: "Google Gemini",
+    });
+
+  } catch (error) {
+
+    console.error(
+      "[lunar] Gemini request failed:",
+      error
+    );
+
+    return c.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Gemini request failed.",
+      },
+      502
+    );
   }
-
-  send.addEventListener("click", sendMessage);
-
-  input.addEventListener("keydown", function(e) {
-
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
-
-  });
-
-  checkStatus();
-  input.focus();
-
-})();
-</script>`;
-
-  return layout("AI", content, script);
-}
+});
 // ----------------------------- OTHER PAGES -----------------------------
 
 app.get("/page/:page", (c) => {
