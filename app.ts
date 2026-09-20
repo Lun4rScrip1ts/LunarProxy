@@ -19,7 +19,11 @@ type ChatMessage = {
 let chatMessages: ChatMessage[] = [];
 let nextChatId = 1;
 
-const SEARCH_ENGINE_NAMES = ["duckduckgo", "mojeek", "bing"];
+const SEARCH_ENGINES: Record<string, string> = {
+  duckduckgo: "https://html.duckduckgo.com/html/?q=",
+  bing: "https://www.bing.com/search?q=",
+  google: "https://www.google.com/search?q=",
+};
 
 function escapeHtml(value: string) {
   return value
@@ -28,27 +32,6 @@ function escapeHtml(value: string) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
-}
-
-function decodeEntities(value: string) {
-  return value
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#0?39;/g, "'")
-    .replace(/&nbsp;/g, " ");
-}
-
-function stripTags(html: string) {
-  return decodeEntities(
-    html
-      .replace(/<script[\s\S]*?<\/script>/gi, " ")
-      .replace(/<style[\s\S]*?<\/style>/gi, " ")
-      .replace(/<[^>]+>/g, " ")
-  )
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 function isSafeTarget(url: URL) {
@@ -251,7 +234,7 @@ h1{font-size:38px;margin:14px 0 8px}
 .search input:focus{border-color:#555;box-shadow:0 0 0 3px rgba(255,255,255,.04)}
 .search button,.primary{height:52px;border:0;border-radius:12px;background:#fff;color:#000;padding:0 22px;font-weight:700}
 .engines,.shortcuts{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
-.engine,.shortcut{border:1px solid #242424;background:#101010;color:#999;border-radius:9px;padding:9px 13px;transition:.15s;text-decoration:none;font-size:14px;display:inline-block}
+.engine,.shortcut{border:1px solid #242424;background:#101010;color:#999;border-radius:9px;padding:9px 13px;transition:.15s}
 .engine.active,.engine:hover,.shortcut:hover{color:#fff;border-color:#555;transform:translateY(-1px)}
 .note{color:#555;font-size:12px;margin-top:25px}
 .page{padding:46px;max-width:1200px;margin:auto}
@@ -283,17 +266,6 @@ h1{font-size:38px;margin:14px 0 8px}
 .viewer{height:calc(100vh - 58px);position:relative}
 .viewer iframe{width:100%;height:100%;border:0;display:block}
 .loading{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:#777;pointer-events:none}
-.searchwrap{max-width:860px;margin:0 auto;padding:34px 20px 60px}
-.searchline{display:flex;gap:9px}
-.searchline input{flex:1;min-width:0;height:50px;background:#101010;border:1px solid #292929;border-radius:12px;color:#fff;padding:0 16px;outline:none}
-.searchline input:focus{border-color:#555}
-.searchline button{height:50px;border:0;border-radius:12px;background:#fff;color:#000;padding:0 24px;font-weight:700}
-.result{display:block;text-decoration:none;color:#fff;background:#0e0e0e;border:1px solid #202020;border-radius:14px;padding:16px 18px;margin:12px 0;transition:.15s}
-.result:hover{border-color:#555;transform:translateY(-2px)}
-.r-title{font-size:17px;font-weight:650}
-.r-url{color:#7ab8ff;font-size:13px;margin-top:4px;word-break:break-all}
-.r-snippet{color:#9a9a9a;font-size:13.5px;margin-top:7px;line-height:1.55}
-.pager{display:flex;gap:10px;justify-content:center;margin:26px 0}
 @media(max-width:700px){.sidebar{width:64px;flex-basis:64px;padding:10px 7px}.brand{font-size:0;text-align:center}.brand span{font-size:23px}.nav{justify-content:center;padding:11px 5px}.nav span{display:none}.page{padding:28px 18px}.center{padding:24px 14px}.search{flex-direction:column}.search button{width:100%}h1{font-size:30px}}
 </style>`;
 
@@ -318,10 +290,6 @@ function categoryCard(
   )}</h3><p>${escapeHtml(description)}</p></button>`;
 }
 
-function engineLabel(name: string) {
-  return name[0].toUpperCase() + name.slice(1);
-}
-
 app.get("/health", (c) =>
   c.json({ ok: true, service: "Lunar Proxy", time: Date.now() })
 );
@@ -342,8 +310,8 @@ app.get("/", (c) => {
 
   <div class="engines">
     <button class="engine active" data-engine="duckduckgo">DuckDuckGo</button>
-    <button class="engine" data-engine="mojeek">Mojeek</button>
     <button class="engine" data-engine="bing">Bing</button>
+    <button class="engine" data-engine="google">Google</button>
   </div>
 
   <div class="shortcuts" style="margin-top:20px">
@@ -353,7 +321,7 @@ app.get("/", (c) => {
     <button class="shortcut" data-url="https://www.instagram.com">Instagram</button>
   </div>
 
-  <div class="note">Searches go through Lunar's own results page, so they work even when search engines block plain proxies.</div>
+  <div class="note">Some sites can block server-side proxying. Lunar cannot override a site's own access restrictions.</div>
 </div></div>`;
 
   const script = `<script>
@@ -371,12 +339,14 @@ app.get("/", (c) => {
     const value=input.value.trim();
     if(!value){input.focus();return;}
 
+    let destination;
     if(isUrl(value)){
-      const dest=/^https?:\\/\\//i.test(value)?value:"https://"+value;
-      location.href="/view?url="+encodeURIComponent(dest);
+      destination=/^https?:\\/\\//i.test(value)?value:"https://"+value;
     }else{
-      location.href="/search?q="+encodeURIComponent(value)+"&engine="+encodeURIComponent(engine);
+      destination=${JSON.stringify(SEARCH_ENGINES)}[engine]+encodeURIComponent(value);
     }
+
+    location.href="/view?url="+encodeURIComponent(destination);
   }
 
   button.addEventListener("click",search);
@@ -403,409 +373,6 @@ app.get("/", (c) => {
 </script>`;
 
   return c.html(layout("Home", content, script));
-});
-
-// ----------------------------- SEARCH -----------------------------
-
-type SearchResult = {
-  title: string;
-  url: string;
-  displayUrl: string;
-  snippet: string;
-};
-
-type SearchOutcome = {
-  results: SearchResult[];
-  engine: string;
-  note: string;
-};
-
-const SKIPPED_RESULT_HOSTS =
-  /^(?:www\.)?(?:google\.|bing\.|mojeek\.|search\.brave\.|yahoo\.|yandex\.)/i;
-
-function displayUrlFor(value: string) {
-  try {
-    const u = new URL(value);
-    return (u.host + u.pathname).replace(/\/+$/, "");
-  } catch {
-    return value;
-  }
-}
-
-function dedupeResults(results: SearchResult[]) {
-  const seen = new Set<string>();
-  const out: SearchResult[] = [];
-
-  for (const result of results) {
-    const key = result.url.replace(/\/+$/, "");
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(result);
-  }
-
-  return out;
-}
-
-function unwrapSearchLink(href: string): string {
-  try {
-    let value = decodeEntities(href);
-
-    if (value.startsWith("//")) {
-      value = "https:" + value;
-    }
-
-    const u = new URL(value);
-
-    if (
-      (u.hostname === "duckduckgo.com" ||
-        u.hostname.endsWith(".duckduckgo.com")) &&
-      u.searchParams.get("uddg")
-    ) {
-      return decodeURIComponent(u.searchParams.get("uddg")!);
-    }
-
-    return value;
-  } catch {
-    return href;
-  }
-}
-
-async function fetchSearchPage(url: string): Promise<string> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 8000);
-
-  try {
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": USER_AGENT,
-        Accept:
-          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "identity",
-      },
-      redirect: "follow",
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      throw new Error("HTTP " + response.status);
-    }
-
-    return await response.text();
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function parseDuckDuckGoLite(html: string): SearchResult[] {
-  const results: SearchResult[] = [];
-  const re = /<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-
-  let match;
-
-  while ((match = re.exec(html)) !== null) {
-    const rawHref = match[1];
-
-    if (!rawHref.includes("uddg=")) continue;
-
-    const url = unwrapSearchLink(rawHref);
-
-    if (!/^https?:\/\//i.test(url)) continue;
-    if (SKIPPED_RESULT_HOSTS.test(new URL(url).hostname)) continue;
-
-    const title = stripTags(match[2]);
-    if (!title) continue;
-
-    const after = html.slice(match.index, match.index + 6000);
-    const snippetMatch =
-      after.match(/<td[^>]*class="result-snippet"[^>]*>([\s\S]*?)<\/td>/i) ||
-      after.match(/<div[^>]*class="result-snippet"[^>]*>([\s\S]*?)<\/div>/i);
-
-    results.push({
-      title,
-      url,
-      displayUrl: displayUrlFor(url),
-      snippet: snippetMatch ? stripTags(snippetMatch[1]) : "",
-    });
-
-    if (results.length >= 20) break;
-  }
-
-  return dedupeResults(results);
-}
-
-function parseDuckDuckGoHtml(html: string): SearchResult[] {
-  const results: SearchResult[] = [];
-  const re = /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-
-  let match;
-
-  while ((match = re.exec(html)) !== null) {
-    const url = unwrapSearchLink(match[1]);
-
-    if (!/^https?:\/\//i.test(url)) continue;
-    if (SKIPPED_RESULT_HOSTS.test(new URL(url).hostname)) continue;
-
-    const title = stripTags(match[2]);
-    if (!title) continue;
-
-    const after = html.slice(match.index, match.index + 6000);
-    const snippetMatch =
-      after.match(/<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i) ||
-      after.match(/<div[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/div>/i);
-
-    results.push({
-      title,
-      url,
-      displayUrl: displayUrlFor(url),
-      snippet: snippetMatch ? stripTags(snippetMatch[1]) : "",
-    });
-
-    if (results.length >= 20) break;
-  }
-
-  return dedupeResults(results);
-}
-
-async function searchDuckDuckGo(q: string, page: number) {
-  const offset = (page - 1) * 10;
-
-  try {
-    const lite = await fetchSearchPage(
-      "https://lite.duckduckgo.com/lite/?q=" +
-        encodeURIComponent(q) +
-        (offset ? "&s=" + offset : "")
-    );
-
-    const liteResults = parseDuckDuckGoLite(lite);
-    if (liteResults.length) return liteResults;
-  } catch {}
-
-  const html = await fetchSearchPage(
-    "https://html.duckduckgo.com/html/?q=" +
-      encodeURIComponent(q) +
-      (offset ? "&s=" + offset : "")
-  );
-
-  return parseDuckDuckGoHtml(html);
-}
-
-function parseMojeek(html: string): SearchResult[] {
-  const results: SearchResult[] = [];
-
-  const re =
-    /<a[^>]*href="(https?:\/\/[^"]+)"[^>]*class="[^"]*(?:title|ob)[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;
-
-  let match;
-
-  while ((match = re.exec(html)) !== null) {
-    const url = decodeEntities(match[1]);
-
-    if (SKIPPED_RESULT_HOSTS.test(new URL(url).hostname)) continue;
-
-    const title = stripTags(match[2]);
-    if (!title) continue;
-
-    const after = html.slice(match.index, match.index + 5000);
-    const snippetMatch = after.match(
-      /<p[^>]*class="[^"]*\bs\b[^"]*"[^>]*>([\s\S]*?)<\/p>/i
-    );
-
-    results.push({
-      title,
-      url,
-      displayUrl: displayUrlFor(url),
-      snippet: snippetMatch ? stripTags(snippetMatch[1]) : "",
-    });
-
-    if (results.length >= 20) break;
-  }
-
-  return dedupeResults(results);
-}
-
-async function searchMojeek(q: string, page: number) {
-  const html = await fetchSearchPage(
-    "https://www.mojeek.com/search?q=" +
-      encodeURIComponent(q) +
-      "&s=" +
-      (page - 1) * 10
-  );
-
-  return parseMojeek(html);
-}
-
-function parseBing(html: string): SearchResult[] {
-  const results: SearchResult[] = [];
-  const chunks = html.split(/<li class="b_algo"/i).slice(1);
-
-  for (const chunk of chunks) {
-    const link = chunk.match(
-      /<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i
-    );
-
-    if (!link) continue;
-
-    const url = decodeEntities(link[1]);
-
-    if (!/^https?:\/\//i.test(url)) continue;
-    if (SKIPPED_RESULT_HOSTS.test(new URL(url).hostname)) continue;
-
-    const title = stripTags(link[2]);
-    if (!title) continue;
-
-    const snippetMatch = chunk.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
-
-    results.push({
-      title,
-      url,
-      displayUrl: displayUrlFor(url),
-      snippet: snippetMatch ? stripTags(snippetMatch[1]) : "",
-    });
-
-    if (results.length >= 20) break;
-  }
-
-  return dedupeResults(results);
-}
-
-async function searchBing(q: string, page: number) {
-  const html = await fetchSearchPage(
-    "https://www.bing.com/search?q=" +
-      encodeURIComponent(q) +
-      "&count=20&first=" +
-      ((page - 1) * 20 + 1) +
-      "&setlang=en-US&cc=us"
-  );
-
-  return parseBing(html);
-}
-
-async function runSearch(
-  q: string,
-  engine: string,
-  page: number
-): Promise<SearchOutcome> {
-  const preferred = SEARCH_ENGINE_NAMES.includes(engine)
-    ? engine
-    : "duckduckgo";
-
-  const order = [
-    preferred,
-    ...SEARCH_ENGINE_NAMES.filter((name) => name !== preferred),
-  ];
-
-  let lastError = "";
-
-  for (const name of order) {
-    try {
-      let results: SearchResult[] = [];
-
-      if (name === "duckduckgo") {
-        results = await searchDuckDuckGo(q, page);
-      } else if (name === "mojeek") {
-        results = await searchMojeek(q, page);
-      } else if (name === "bing") {
-        results = await searchBing(q, page);
-      }
-
-      if (results.length) {
-        return { results, engine: name, note: "" };
-      }
-    } catch (error) {
-      lastError =
-        error instanceof Error ? error.message : "request failed";
-    }
-  }
-
-  return { results: [], engine: preferred, note: lastError };
-}
-
-app.get("/search", async (c) => {
-  const q = (c.req.query("q") || "").trim();
-  const engine = (c.req.query("engine") || "duckduckgo").toLowerCase();
-  const page = Math.max(1, parseInt(c.req.query("page") || "1", 10) || 1);
-
-  if (!q) {
-    return c.redirect("/");
-  }
-
-  const outcome = await runSearch(q, engine, page);
-
-  const tabs = SEARCH_ENGINE_NAMES.map((name) => {
-    const active = name === outcome.engine && outcome.results.length > 0;
-    return `<a class="engine ${active ? "active" : ""}" href="/search?q=${encodeURIComponent(
-      q
-    )}&engine=${name}">${engineLabel(name)}</a>`;
-  }).join("");
-
-  let body = "";
-
-  if (outcome.results.length === 0) {
-    const directDdg =
-      "https://html.duckduckgo.com/html/?q=" + encodeURIComponent(q);
-
-    body = `<div class="result" style="text-align:center">
-      <div class="r-title">No results</div>
-      <div class="r-snippet">Every search engine failed or returned nothing${
-        outcome.note ? " (" + escapeHtml(outcome.note) + ")" : ""
-      }. Try again in a moment, or <a style="color:#7ab8ff" href="/view?url=${encodeURIComponent(
-        directDdg
-      )}">open DuckDuckGo directly</a>.</div>
-    </div>`;
-  } else {
-    body = outcome.results
-      .map(
-        (result) => `
-    <a class="result" href="/view?url=${encodeURIComponent(result.url)}">
-      <div class="r-title">${escapeHtml(result.title)}</div>
-      <div class="r-url">${escapeHtml(result.displayUrl)}</div>
-      ${
-        result.snippet
-          ? `<div class="r-snippet">${escapeHtml(result.snippet)}</div>`
-          : ""
-      }
-    </a>`
-      )
-      .join("");
-
-    const prev =
-      page > 1
-        ? `<a class="engine" href="/search?q=${encodeURIComponent(
-            q
-          )}&engine=${encodeURIComponent(engine)}&page=${page - 1}">← Previous</a>`
-        : "";
-
-    const next = `<a class="engine" href="/search?q=${encodeURIComponent(
-      q
-    )}&engine=${encodeURIComponent(engine)}&page=${page + 1}">Next →</a>`;
-
-    body += `<div class="pager">${prev}${next}</div>`;
-  }
-
-  const content = `
-<div class="searchwrap">
-  <form class="searchline" onsubmit="return lunarSearch(event)">
-    <input id="searchInput" value="${escapeHtml(q)}" autocomplete="off" spellcheck="false">
-    <button type="submit">Search</button>
-  </form>
-  <div class="engines" style="margin-top:14px">${tabs}</div>
-  <div class="note" style="text-align:left;margin-top:16px">Page ${page} · served by ${engineLabel(
-    outcome.engine
-  )}</div>
-  <div>${body}</div>
-</div>`;
-
-  const script = `<script>
-function lunarSearch(e){
-  e.preventDefault();
-  const v=document.getElementById("searchInput").value.trim();
-  if(v) location.href="/search?q="+encodeURIComponent(v)+"&engine=${escapeHtml(engine)}";
-  return false;
-}
-</script>`;
-
-  return c.html(layout("Search", content, script));
 });
 
 // ----------------------------- VIEWER -----------------------------
@@ -888,8 +455,9 @@ function go(){
     dest = "https://" + v;
   }
   else {
-    location.href = "/search?q=" + encodeURIComponent(v);
-    return;
+    dest =
+      "https://duckduckgo.com/?q=" +
+      encodeURIComponent(v);
   }
 
   location.href = "/view?url=" + encodeURIComponent(dest);
@@ -924,6 +492,7 @@ app.all("/proxy", async (c) => {
     return c.json({ error: "URL required" }, 400);
   }
 
+  // Decode the URL safely.
   try {
     raw = decodeURIComponent(raw);
   } catch {}
@@ -940,6 +509,14 @@ app.all("/proxy", async (c) => {
     return c.json({ error: "Invalid URL" }, 400);
   }
 
+  /*
+   * DuckDuckGo result links often look like:
+   *
+   * /l/?uddg=https%3A%2F%2Fexample.com
+   *
+   * We don't want to proxy DuckDuckGo's redirect page.
+   * We want to extract the real destination.
+   */
   const isDuckDuckGo =
     target.hostname === "duckduckgo.com" ||
     target.hostname.endsWith(".duckduckgo.com");
@@ -969,6 +546,7 @@ app.all("/proxy", async (c) => {
     }
   }
 
+  // Final safety check after any URL unwrapping.
   if (!isSafeTarget(target)) {
     return c.json({ error: "Blocked target" }, 403);
   }
@@ -1000,6 +578,9 @@ app.all("/proxy", async (c) => {
 
     const headers = new Headers();
 
+    /*
+     * Copy useful response headers.
+     */
     for (const name of [
       "content-type",
       "content-language",
@@ -1016,6 +597,10 @@ app.all("/proxy", async (c) => {
     }
 
     headers.set("X-Lunar-Upstream", target.hostname);
+
+    /*
+     * We're handling compression ourselves.
+     */
     headers.delete("content-encoding");
     headers.delete("content-length");
 
@@ -1029,12 +614,31 @@ app.all("/proxy", async (c) => {
     const contentType =
       response.headers.get("content-type") || "";
 
+    /*
+     * HTML pages need URL rewriting so that:
+     *
+     * images
+     * CSS
+     * JavaScript
+     * links
+     * forms
+     * media
+     *
+     * continue going through Lunar.
+     */
     if (
       contentType.includes("text/html") ||
       contentType.includes("application/xhtml+xml")
     ) {
       const text = await response.text();
 
+      /*
+       * IMPORTANT:
+       * response.url may be different from target.href because
+       * the upstream server may have redirected somewhere else.
+       *
+       * Using response.url gives rewriteHtml the correct base URL.
+       */
       const baseUrl = response.url || target.href;
 
       const rewritten = rewriteHtml(text, baseUrl);
@@ -1047,6 +651,10 @@ app.all("/proxy", async (c) => {
       });
     }
 
+    /*
+     * Images, CSS, JS, fonts, videos, etc.
+     * are passed through without HTML rewriting.
+     */
     const buffer = await response.arrayBuffer();
 
     return new Response(buffer, {
@@ -1078,7 +686,6 @@ app.all("/proxy", async (c) => {
     clearTimeout(timer);
   }
 });
-
 // ----------------------------- EMBEDS -----------------------------
 
 app.get("/embed/youtube", (c) => {
@@ -1517,7 +1124,6 @@ function aiPage() {
     script
   );
 }
-
 // ----------------------------- OTHER PAGES -----------------------------
 
 app.get("/page/:page", (c) => {
